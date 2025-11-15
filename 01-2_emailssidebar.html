@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Send or draft emails</title>
+<base target="_top">
+<style>
+/* Base styles */
+body { font-family: sans-serif; font-size: 13px; margin: 0; padding: 15px; box-sizing: border-box; }
+/* Headings and structure */
+h3, h4 { margin-top: 0; margin-bottom: 15px; }
+h3 { padding-top: 15px; border-top: 1px solid #ccc; font-weight: bold; }
+h3:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+.form-group, #resultsView { margin-bottom: 15px; border: 1px solid #ccc; padding: 15px; border-radius: 5px; box-sizing: border-box; }
+.optional-group { margin-top: 10px; }
+/* Form element styling */
+label { display: block; margin-bottom: 5px; font-weight: normal; cursor: default;}
+label.inline-label { display: inline-block; margin-bottom: 0; vertical-align: middle; margin-left: 5px; font-weight: normal; cursor: pointer;}
+label.required::after { content: "*"; color: red; margin-left: 5px; }
+.form-group > label.required { font-weight: bold; }
+select, input[type=text], input[type=email] {
+    width: 100%; padding: 8px; margin-bottom: 15px; box-sizing: border-box;
+    border: 1px solid black; border-radius: 4px; font-size: inherit;
+    background-color: #fff; color: inherit;
+}
+select + .info-note, input + .info-note { margin-top: -10px; margin-bottom: 15px;}
+
+input[type=checkbox] { margin-right: 5px; vertical-align: middle; cursor: pointer; }
+/* Buttons */
+button { padding: 10px 20px; font-size: 1em; border: 1px solid #aaa; border-radius: 4px; cursor: pointer; transition: background-color 0.1s ease, box-shadow 0.1s ease; background-color: #f0f0f0;}
+button:hover { background-color: #e0e0e0; }
+button:active { background-color: #d0d0d0; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1); }
+button:disabled { cursor: not-allowed; opacity: 0.6; background-color: #f0f0f0; box-shadow: none; }
+.button-container { text-align: center; margin-top: 20px; }
+.button-container button {
+    display: block; width: fit-content; margin: 12px auto;
+}
+.result-actions button { display: inline-block; width: auto; margin: 10px 5px 0 5px; }
+
+/* --- Inactive/Disabled States --- */
+input:disabled, select:disabled, textarea:disabled {
+  cursor: not-allowed; opacity: 0.7;
+}
+input[type=checkbox]:disabled { opacity: 0.6; }
+input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: normal; cursor: default; }
+input[type=checkbox]#enableBccSharedInbox + label.inline-label {
+  color: initial;
+  transition: color 0.2s ease;
+}
+input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
+  color: #999;
+}
+/* Placeholder Group Inactive State */
+.placeholder-group.inactive { border-left-color: #ddd; }
+.placeholder-group.inactive .placeholder-field label { color: #999; font-weight: normal; }
+.placeholder-group.inactive .placeholder-controls select,
+.placeholder-group.inactive .placeholder-controls input[type=text] {
+  background-color: #eee; border-color: #ddd; color: #999;
+}
+/* Placeholder Group Active State */
+.placeholder-group:not(.inactive) .placeholder-field label { color: inherit; font-weight: bold; }
+.placeholder-group:not(.inactive) .placeholder-controls select,
+.placeholder-group:not(.inactive) .placeholder-controls input[type=text] {
+   background-color: #fff; border-color: black; color: inherit;
+}
+/* --- End Inactive/Disabled States --- */
+
+/* Specific layouts */
+.info-note { font-size: 0.9em; color: #555; padding: 8px 10px; background-color: #f8f8f8; border: 1px dashed #ccc; border-radius: 4px;}
+.info-note p { margin-bottom: 5px; }
+.info-note p:last-child { margin-bottom: 0; }
+.info-note code { background-color: #ddd; padding: 1px 3px; border-radius: 3px; font-family: monospace; }
+.placeholder-activation { margin-bottom: 8px; }
+.placeholder-group { margin-top: 10px; margin-bottom: 15px; padding-left: 15px; border-left: 3px solid #eee; transition: border-color 0.2s ease; }
+.placeholder-controls { }
+.placeholder-field { margin-bottom: 15px; }
+ .placeholder-field > div { margin-bottom: 8px; }
+ .placeholder-field > div:last-child { margin-bottom: 0; }
+ .placeholder-field label { margin-bottom: 3px; font-size: 0.9em; font-weight: bold; transition: color 0.2s ease; }
+ .placeholder-field select, .placeholder-field input { margin-bottom: 0; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+
+/* Status/Results Area */
+#statusMessage { margin-top: 15px; text-align: center; font-weight: bold; min-height: 1.2em; }
+.status-error { color: red; }
+.status-success { color: green; }
+#resultsView h4 { margin-bottom: 10px; }
+#errorReportSection { display: none; }
+#errorList { max-height: 200px; overflow-y: auto; background-color: #f9f9f9; border: 1px solid #eee; padding: 10px; margin-top: 10px; font-size: 0.9em; }
+#errorList ul { list-style: none; padding: 0; margin: 0; }
+#errorList li { padding: 3px 0; border-bottom: 1px dotted #ddd; }
+#errorList li:last-child { border-bottom: none; }
+#errorList .report-category { font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 1.05em; }
+#errorList .report-category:first-child { margin-top: 0; }
+#errorList .report-item { padding-left: 15px; }
+#errorList .report-item.success { color: green; }
+#errorList .report-item.fail-input { color: orange; }
+#errorList .report-item.fail-process { color: red; }
+#errorList .report-item.error { color: red; }
+
+.result-actions { text-align: center; margin-top: 20px; }
+/* Loading State */
+#loadingState { display: none; text-align: center; padding: 30px 15px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; }
+#loadingState p { margin-bottom: 15px; }
+#loadingState small { color: #666; }
+.loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 15px auto; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="formContent">
+  <div class="form-group">
+    <h3>Core settings</h3>
+    <label for="executionCol" class="required">Trigger column</label>
+    <select id="executionCol"></select>
+    <p class="info-note">Select the column containing the trigger value '1'. Rows marked with '1' will be processed.</p>
+
+    <label for="recipientCol" class="required">Recipient email column</label>
+    <select id="recipientCol"></select>
+    <p class="info-note">If a cell contains multiple emails, separate them with a semicolon (e.g., <code>abc@example.com; def@example.com</code>).</p>
+
+    <label for="subjectLine" class="required">Subject line of Gmail draft</label>
+    <input type="text" id="subjectLine" placeholder="Enter exact draft subject line">
+    <p class="info-note">First, create an email draft in your Gmail 'Drafts' folder. Enter the <strong>exact subject line</strong> of that draft here. The script will use its body as the template. <strong>Important:</strong> Ensure only <strong>one</strong> draft has this subject.</p>
+
+    <label for="ccCol">Recipient email CC column</label>
+    <select id="ccCol"><option value="" selected>None</option></select>
+    <p class="info-note">Separate multiple emails with a semicolon.</p>
+
+    <div style="display: flex; align-items: center; margin-bottom: 15px;">
+        <input type="checkbox" id="enableBccSharedInbox" checked>
+        <label for="enableBccSharedInbox" class="inline-label">BCC gcs-sharedinbox@google.com</label>
+    </div>
+  </div>
+
+  <div class="form-group optional-group">
+    <h3>Placeholders</h3>
+    <p class="info-note">Define placeholders like <code>{{ContactName}}</code> to personalize your email. Enter the tag below and select the corresponding column. Only perfectly matching tags in your Gmail draft will be replaced.</p>
+
+    <div id="placeholder1Group" class="placeholder-group inactive">
+        <div class="placeholder-activation">
+            <input type="checkbox" id="activatePlaceholder1"><label for="activatePlaceholder1" class="inline-label">Activate Placeholder 1</label>
+        </div>
+        <div class="placeholder-controls">
+            <div class="placeholder-field">
+                <div><label for="placeholder1Col">Column</label><select id="placeholder1Col" disabled></select></div>
+                <div><label for="placeholder1Name">Placeholder Tag</label><input type="text" id="placeholder1Name" placeholder="{{PlaceholderName}}" disabled></div>
+            </div>
+        </div>
+    </div>
+    <div id="placeholder2Group" class="placeholder-group inactive">
+        <div class="placeholder-activation">
+            <input type="checkbox" id="activatePlaceholder2" disabled><label for="activatePlaceholder2" class="inline-label">Activate Placeholder 2</label>
+        </div>
+        <div class="placeholder-controls">
+            <div class="placeholder-field">
+                <div><label for="placeholder2Col">Column</label><select id="placeholder2Col" disabled></select></div>
+                <div><label for="placeholder2Name">Placeholder Tag</label><input type="text" id="placeholder2Name" placeholder="{{PlaceholderName}}" disabled></div>
+            </div>
+        </div>
+    </div>
+    <div id="placeholder3Group" class="placeholder-group inactive">
+       <div class="placeholder-activation">
+            <input type="checkbox" id="activatePlaceholder3" disabled><label for="activatePlaceholder3" class="inline-label">Activate Placeholder 3</label>
+        </div>
+        <div class="placeholder-controls">
+            <div class="placeholder-field">
+                <div><label for="placeholder3Col">Column</label><select id="placeholder3Col" disabled></select></div>
+                <div><label for="placeholder3Name">Placeholder Tag</label><input type="text" id="placeholder3Name" placeholder="{{PlaceholderName}}" disabled></div>
+            </div>
+        </div>
+    </div>
+     <div id="placeholder4Group" class="placeholder-group inactive">
+       <div class="placeholder-activation">
+            <input type="checkbox" id="activatePlaceholder4" disabled><label for="activatePlaceholder4" class="inline-label">Activate Placeholder 4</label>
+        </div>
+        <div class="placeholder-controls">
+            <div class="placeholder-field">
+                <div><label for="placeholder4Col">Column</label><select id="placeholder4Col" disabled></select></div>
+                <div><label for="placeholder4Name">Placeholder Tag</label><input type="text" id="placeholder4Name" placeholder="{{PlaceholderName}}" disabled></div>
+            </div>
+        </div>
+    </div>
+     <div id="placeholder5Group" class="placeholder-group inactive">
+       <div class="placeholder-activation">
+            <input type="checkbox" id="activatePlaceholder5" disabled><label for="activatePlaceholder5" class="inline-label">Activate Placeholder 5</label>
+        </div>
+        <div class="placeholder-controls">
+            <div class="placeholder-field">
+                <div><label for="placeholder5Col">Column</label><select id="placeholder5Col" disabled></select></div>
+                <div><label for="placeholder5Name">Placeholder Tag</label><input type="text" id="placeholder5Name" placeholder="{{PlaceholderName}}" disabled></div>
+            </div>
+        </div>
+    </div>
+  </div>
+
+  <div class="form-group optional-group">
+    <h3>Email Open Tracking (Cooming soon)</h3>
+    <div class="info-note">
+        <p>If enabled, the script will write "Not Opened" in your chosen output column. When the recipient opens the email, this status will update to "Opened" with a timestamp.</p>
+        <p><strong>Important:</strong> To use this, you must deploy the script as a <strong>Web App</strong> with access set to "Anyone, even anonymous".</p>
+    </div>
+    
+    <div id="trackingGroup">
+        <div style="display: flex; align-items: center; margin-bottom: 15px;">
+            <input type="checkbox" id="enableTracking" disabled>
+            <label for="enableTracking" class="inline-label">Enable email open tracking</label>
+        </div>
+
+        <div id="trackingControls" style="display: none;">
+        <label for="trackingOutputCol" class="required">Output column for open status</label>
+        <select id="trackingOutputCol"></select>
+        <p class="info-note">Select an empty column where the tracking status ("Not Opened" / "Opened...") will be written.</p>
+        </div>
+    </div>
+  </div>
+  <div class="button-container">
+    <button id="sendButton">Start sending</button>
+    <button id="draftButton" class="draft-button">Start drafting</button>
+  </div>
+  <div id="statusMessage"></div>
+</div>
+
+<div id="loadingState" style="display: none;">
+  <p><strong id="loadingActionText">Processing...</strong><strong> Please wait.</strong></p>
+  <div class="loader"></div>
+  <p><small>This may take a few moments depending on the number of rows being processed.</small></p>
+</div>
+
+<div id="resultsView" style="display: none;">
+    <h4 id="resultsTitle">Email process complete</h4>
+    <p id="processedCountMessage"></p>
+    <div id="errorReportSection">
+        <h4>Processing Report</h4>
+        <div id="errorList"></div>
+    </div>
+    <div class="result-actions">
+        <button id="runAgainButton">Configure new batch</button>
+        <button id="closeButton">Close</button>
+    </div>
+</div>
+
+<script>
+  let currentResults = null;
+
+  // --- Helper Functions ---
+  const allColumnLetters = (() => { const letters = []; for (let i = 0; i < 26; i++) letters.push(String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('A' + String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('B' + String.fromCharCode(65 + i)); return letters; })();
+  function populateDropdown(id, allowNone = false) {
+      const select = document.getElementById(id); if (!select) return; select.innerHTML = ''; const d=document.createElement("option"); d.value=""; d.textContent=allowNone?"None":"Select column"; d.disabled=!allowNone; d.selected=true; select.appendChild(d); allColumnLetters.forEach(l => { const o=document.createElement("option"); o.value=l; o.textContent=l; select.appendChild(o); });
+  }
+  // --- End Helper Functions ---
+
+  // --- Element References ---
+  const formContent = document.getElementById('formContent'), loadingState = document.getElementById('loadingState'), loadingActionText = document.getElementById('loadingActionText'), resultsView = document.getElementById('resultsView'), resultsTitle = document.getElementById('resultsTitle'), sendButton = document.getElementById('sendButton'), draftButton = document.getElementById('draftButton'), statusMessage = document.getElementById('statusMessage'), processedCountMessage = document.getElementById('processedCountMessage'), errorReportSection = document.getElementById('errorReportSection'), errorList = document.getElementById('errorList'), closeButton = document.getElementById('closeButton'), runAgainButton = document.getElementById('runAgainButton');
+  const phCheckboxes = [1, 2, 3, 4, 5].map(i => document.getElementById(`activatePlaceholder${i}`));
+  const phControls = [1, 2, 3, 4, 5].map(i => ({ group: document.getElementById(`placeholder${i}Group`), colSelect: document.getElementById(`placeholder${i}Col`), nameInput: document.getElementById(`placeholder${i}Name`) }));
+  const bccSharedInboxCheckbox = document.getElementById('enableBccSharedInbox');
+  // NEW: Add references for tracking elements
+  const enableTrackingCheckbox = document.getElementById('enableTracking');
+  const trackingControls = document.getElementById('trackingControls');
+  const trackingOutputCol = document.getElementById('trackingOutputCol');
+
+  /** Updates placeholder states */
+  function updatePlaceholderStates() {
+    phCheckboxes.forEach((checkbox, index) => {
+        if (!checkbox) return;
+        const controls = phControls[index];
+        if (!controls || !controls.group || !controls.colSelect || !controls.nameInput) return;
+
+        const isPreviousChecked = (index === 0) || (phCheckboxes[index - 1] && phCheckboxes[index - 1].checked);
+        checkbox.disabled = !isPreviousChecked;
+        if (!isPreviousChecked) { checkbox.checked = false; }
+
+        const isCurrentActive = checkbox.checked && !checkbox.disabled;
+        populateDropdown(controls.colSelect.id, !isCurrentActive);
+        controls.colSelect.disabled = !isCurrentActive;
+        controls.nameInput.disabled = !isCurrentActive;
+        controls.group.classList.toggle('inactive', !isCurrentActive);
+
+        if (!isCurrentActive) {
+            controls.nameInput.value = "";
+            controls.colSelect.value = "";
+        } else {
+            if (!controls.colSelect.value) controls.colSelect.value = "";
+        }
+    });
+  }
+
+  /** Shows the main form view, hides others */
+  function showFormView() {
+      if (statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
+      if (resultsView) resultsView.style.display = 'none';
+      if (loadingState) loadingState.style.display = 'none';
+      if (formContent) formContent.style.display = 'block';
+      if (sendButton) sendButton.disabled = false;
+      if (draftButton) draftButton.disabled = false;
+      currentResults = null;
+  }
+
+  /** Handles button clicks for Send or Draft */
+  function handleButtonClick(actionType) {
+    if(statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
+
+    // NEW: Get tracking data from the form
+    const isTrackingEnabled = enableTrackingCheckbox.checked;
+    
+    const formData = {
+      executionCol: document.getElementById('executionCol').value,
+      recipientCol: document.getElementById('recipientCol').value,
+      ccCol: document.getElementById('ccCol').value,
+      subjectLine: document.getElementById('subjectLine').value.trim(),
+      bccSharedInbox: bccSharedInboxCheckbox.checked,
+      actionType: actionType,
+      // NEW: Add tracking properties
+      enableTracking: isTrackingEnabled,
+      trackingOutputCol: isTrackingEnabled ? trackingOutputCol.value : null,
+      placeholders: []
+    };
+
+    let errorMessages = [];
+    const activePlaceholdersColumns = [];
+
+    // Validation: Core Fields
+    if (!formData.executionCol) { errorMessages.push('Select Trigger column.'); }
+    if (!formData.recipientCol) { errorMessages.push('Select Recipient email column.'); }
+    if (!formData.subjectLine) { errorMessages.push('Enter Subject line (must match Gmail draft).'); }
+
+    // NEW: Add validation for tracking
+    if (isTrackingEnabled && !formData.trackingOutputCol) {
+        errorMessages.push('Select an Output column for tracking.');
+    }
+
+    // Validation: Placeholders
+    phCheckboxes.forEach((checkbox, index) => {
+        if (checkbox && checkbox.checked && !checkbox.disabled) {
+            const num = index + 1;
+            const controls = phControls[index];
+            const colVal = controls.colSelect.value;
+            const nameVal = controls.nameInput.value.trim();
+
+            if (!colVal) errorMessages.push(`Placeholder ${num} is active, please select its Column.`);
+            if (!nameVal) errorMessages.push(`Placeholder ${num} is active, please enter its Placeholder Tag.`);
+            else if (!(nameVal.startsWith('{{') && nameVal.endsWith('}}') && nameVal.length > 4)) {
+                errorMessages.push(`Placeholder ${num} Tag ('${nameVal}') must be in {{PlaceholderName}} format.`);
+            }
+
+            formData.placeholders.push({ col: colVal, name: nameVal });
+            if (colVal) activePlaceholdersColumns.push(colVal);
+        }
+    });
+
+    // Validation: Duplicate Columns
+    const columnsToCheck = [ 
+        formData.executionCol, 
+        formData.recipientCol, 
+        formData.ccCol, 
+        formData.trackingOutputCol, // NEW: Add tracking column to the check
+        ...activePlaceholdersColumns 
+    ];
+    const validSelectedColumns = columnsToCheck.filter(col => col && col !== "");
+    if (new Set(validSelectedColumns).size < validSelectedColumns.length) {
+        errorMessages.push('Duplicate column selection detected. Each selected column must be unique.');
+    }
+
+    // Display errors or proceed
+    if (errorMessages.length > 0) {
+        if(statusMessage) {
+            statusMessage.innerHTML = 'Error:<br>' + errorMessages.join('<br>');
+            statusMessage.className = 'status-error';
+        }
+        return;
+    }
+
+    // Switch to loading view
+    if(formContent) formContent.style.display = 'none';
+    if(resultsView) resultsView.style.display = 'none';
+    if(loadingState) loadingState.style.display = 'block';
+    if(loadingActionText) loadingActionText.textContent = (actionType === 'send' ? 'Sending emails...' : 'Saving drafts...');
+    if (sendButton) sendButton.disabled = true;
+    if (draftButton) draftButton.disabled = true;
+
+    // Call backend
+    google.script.run
+        .withSuccessHandler(onSuccess)
+        .withFailureHandler(onFailure)
+        .processEmailRequest(formData);
+  }
+
+  /** Callback for SUCCESSFUL Apps Script execution. */
+  function onSuccess(resultObject) {
+    console.log("onSuccess received:", resultObject);
+    if(loadingState) loadingState.style.display = 'none';
+
+    if (!resultObject || typeof resultObject.processedRowCount === 'undefined' || !Array.isArray(resultObject.succeeded)) {
+        console.error("Invalid result object structure received from server:", resultObject);
+        onFailure(new Error("Received invalid data structure from server.")); return;
+    }
+    currentResults = resultObject;
+
+    const actionVerbPast = resultObject.actionType === 'send' ? 'sent' : 'saved as draft';
+    const actionVerbPresent = resultObject.actionType === 'send' ? 'Send' : 'Save Draft';
+
+    if(resultsTitle) resultsTitle.textContent = `${actionVerbPresent} Process Complete`;
+    if(processedCountMessage) processedCountMessage.textContent = `Attempted to ${resultObject.actionType} emails for ${resultObject.processedRowCount} triggered row(s). See report below.`;
+
+    // --- Build Categorized Report ---
+    if(errorList) errorList.innerHTML = '';
+    const ul = document.createElement('ul');
+    let reportHasContent = false;
+    const addReportItems = (category, items, cssClass) => {
+          if (items.length > 0) {
+              reportHasContent = true;
+              const categoryHeader = document.createElement('div');
+              categoryHeader.className = 'report-category';
+              categoryHeader.textContent = `${category} (${items.length})`;
+              ul.appendChild(categoryHeader);
+              items.forEach(item => {
+                  const li = document.createElement('li');
+                  li.className = `report-item ${cssClass}`;
+                  li.textContent = `Row ${item.row || '?'}: ${item.details || 'Details N/A'}`;
+                  ul.appendChild(li);
+              });
+          }
+     };
+
+    addReportItems(`Successfully ${actionVerbPast}`, resultObject.succeeded, 'success');
+    addReportItems('Failed (Input Data Issue)', resultObject.failedInput, 'fail-input');
+    addReportItems('Failed (Processing Issue)', resultObject.failedProcessing, 'fail-process');
+
+    if (reportHasContent) {
+         errorList.appendChild(ul);
+         if(errorReportSection) errorReportSection.style.display = 'block';
+    } else {
+        if(errorReportSection) errorReportSection.style.display = 'none';
+    }
+    // --- End Report Building ---
+
+    if(resultsView) resultsView.style.display = 'block';
+  }
+
+  /** Callback for FAILED Apps Script execution (fatal errors). */
+  function onFailure(error) {
+    console.error("onFailure received:", error);
+    showFormView();
+    if(statusMessage) { statusMessage.textContent = 'Fatal Script Error: ' + (error.message || 'Unknown error. Check script logs.'); statusMessage.className = 'status-error'; }
+  }
+
+  // --- Initial Setup ---
+  document.addEventListener('DOMContentLoaded', (event) => {
+      try {
+          // Populate dropdowns
+          ['executionCol', 'recipientCol'].forEach(id => populateDropdown(id, false));
+          populateDropdown('ccCol', true);
+          [1, 2, 3, 4, 5].forEach(i => populateDropdown(`placeholder${i}Col`, true));
+          // NEW: Populate tracking dropdown
+          populateDropdown('trackingOutputCol', false);
+
+          // Add Event Listeners
+          if (sendButton) sendButton.addEventListener('click', () => handleButtonClick('send'));
+          if (draftButton) draftButton.addEventListener('click', () => handleButtonClick('draft'));
+          if (closeButton) closeButton.addEventListener('click', () => google.script.host.close());
+          if (runAgainButton) runAgainButton.addEventListener('click', showFormView);
+          phCheckboxes.forEach(checkbox => { if (checkbox) checkbox.addEventListener('change', updatePlaceholderStates); });
+          
+          // NEW: Add listener for the tracking checkbox
+          if (enableTrackingCheckbox) {
+            enableTrackingCheckbox.addEventListener('change', () => {
+              const isEnabled = enableTrackingCheckbox.checked;
+              trackingControls.style.display = isEnabled ? 'block' : 'none';
+            });
+          }
+          
+          // Initial UI State
+          updatePlaceholderStates();
+          showFormView();
+          // NEW: Ensure tracking controls are hidden on load
+          if (trackingControls) trackingControls.style.display = 'none';
+          console.log("Email Sender Sidebar UI Initialized");
+      } catch (initError) {
+          console.error("Error during sidebar initialization:", initError);
+          document.body.innerHTML = `<p style="color:red; padding:15px;">Critical Error initializing sidebar: ${initError.message}. Please reload.</p>`;
+      }
+  });
+</script>
+
+</body>
+</html>
