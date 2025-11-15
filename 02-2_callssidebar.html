@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Schedule Calls</title>
+<base target="_top">
+<style>
+/* Base styles */
+body { font-family: sans-serif; font-size: 13px; margin: 0; padding: 15px; box-sizing: border-box; }
+/* Headings and structure */
+h3, h4 { margin-top: 0; margin-bottom: 15px; }
+h3 { padding-top: 15px; border-top: 1px solid #ccc; font-weight: bold; /* Keep H3 bold */ }
+h3:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+h3.required::after { content: "*"; color: red; margin-left: 5px; font-weight: normal; }
+.form-group, #resultsView { margin-bottom: 15px; border: 1px solid #ccc; padding: 15px; border-radius: 5px; box-sizing: border-box; }
+.optional-group { margin-top: 10px; }
+/* Form element styling */
+label { display: block; margin-bottom: 5px; cursor: default; font-weight: normal; /* Default label weight */}
+label.inline-label { display: inline-block; margin-bottom: 0; vertical-align: middle; margin-left: 5px; font-weight: normal; cursor: pointer; }
+label.required::after { content: "*"; color: red; margin-left: 5px; }
+/* Make top-level labels for required inputs bold */
+.form-group > label.required { font-weight: bold; }
+/* Style for specifically designated bold labels that aren't required */
+.form-group > label.label-bold {
+  font-weight: bold;
+}
+select, input[type=text], input[type=email], input[type=number], input[type=date], input[type=time], textarea {
+  width: 100%; padding: 8px; margin-bottom: 15px; box-sizing: border-box;
+  border: 1px solid black; /* Default border */
+  border-radius: 4px; font-size: inherit;
+  background-color: #fff; /* Default background */
+  color: inherit; /* Default text color */
+}
+select + .info-note, input + .info-note, .info-note-div { margin-top: -12px; margin-bottom: 15px; }
+textarea + .info-note { margin-top: -10px; } /* Keep textarea note spacing tight */
+
+
+input[type=checkbox] { margin-right: 5px; vertical-align: middle; cursor: pointer; }
+/* Buttons */
+button { padding: 10px 20px; font-size: 1em; border: 1px solid #aaa; border-radius: 4px; cursor: pointer; transition: background-color 0.1s ease, box-shadow 0.1s ease; background-color: #f0f0f0;}
+button:hover { background-color: #e0e0e0; }
+button:active { background-color: #d0d0d0; box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1); }
+button:disabled { cursor: not-allowed; opacity: 0.6; background-color: #f0f0f0; box-shadow: none; }
+.button-container { text-align: center; margin-top: 20px; }
+.button-container button { display: block; width: fit-content; margin: 12px auto; }
+.result-actions button { display: inline-block; width: auto; margin: 10px 5px 0 5px; }
+
+
+/* --- Inactive/Disabled States --- */
+
+
+/* General opacity for disabled elements (JS handles enabling/disabling) */
+input:disabled, select:disabled, textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.7; /* Use opacity primarily for disabled state */
+}
+input[type=checkbox]:disabled {
+  opacity: 0.6; /* Keep checkbox opacity distinct if needed */
+}
+input[type=checkbox]:disabled + label.day-label,
+input[type=checkbox]:disabled + label.inline-label {
+  color: #999;
+  font-weight: normal;
+  cursor: default;
+}
+
+
+/* --- Styles driven by .inactive class (toggled by JS) --- */
+
+
+/* Day Availability Inactive State */
+.day-availability.inactive { color: #999; }
+.day-availability.inactive .time-inputs input[type=time] {
+  background-color: #eee; border-color: #ddd; color: #999;
+}
+.day-availability.inactive .time-inputs span { color: #999; }
+
+
+/* Description Section Inactive State */
+#descriptionControls.inactive > label[for="description"] { color: #999; }
+#descriptionControls.inactive textarea {
+   background-color: #eee; border-color: #ddd; color: #999;
+}
+
+/* NEW: Description Text label ACTIVE State (bold) */
+#descriptionControls:not(.inactive) > label[for="description"] {
+  font-weight: bold;
+  color: inherit; /* Ensure it uses default text color when active */
+}
+
+
+/* Placeholder Group Inactive State */
+.placeholder-group.inactive {
+  border-left-color: #ddd;
+}
+.placeholder-group.inactive .placeholder-field label {
+  color: #999;
+  font-weight: normal; /* Override default bold */
+}
+.placeholder-group.inactive .placeholder-controls select,
+.placeholder-group.inactive .placeholder-controls input[type=text] {
+  background-color: #eee;
+  border-color: #ddd;
+  color: #999;
+}
+
+
+/* --- Explicit ACTIVE state styles (when .inactive is NOT present) --- */
+
+
+.placeholder-group:not(.inactive) .placeholder-field label {
+   color: inherit; /* Default color */
+   font-weight: bold; /* Default bold for these labels */
+}
+.placeholder-group:not(.inactive) .placeholder-controls select,
+.placeholder-group:not(.inactive) .placeholder-controls input[type=text] {
+   background-color: #fff; /* Default background */
+   border-color: black;   /* Default border */
+   color: inherit;       /* Default text color */
+}
+/* --- End Inactive/Disabled States --- */
+
+
+
+
+/* Specific layouts */
+.info-note, .info-note-div { font-size: 0.9em; color: #555; margin-bottom: 15px; padding: 8px 10px; background-color: #f8f8f8; border: 1px dashed #ccc; border-radius: 4px;}
+.info-note-div p { margin-bottom: 5px; } .info-note-div p:last-child { margin-bottom: 0; }
+.info-note code, .info-note-div code { background-color: #ddd; padding: 1px 3px; border-radius: 3px; font-family: monospace; }
+.day-availability { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+.day-availability:last-of-type { border-bottom: none; margin-bottom: 0; }
+.day-label-line { margin-bottom: 5px; display: flex; align-items: center; }
+.day-label-line input[type=checkbox] { margin-right: 8px; flex-shrink: 0; }
+.day-label { font-weight: normal; display: inline; cursor: pointer; }
+.day-controls { }
+.time-inputs { display: flex; align-items: center; gap: 5px; flex-grow: 1; min-width: 150px; }
+.time-inputs input[type=time] { width: auto; padding: 5px; margin-bottom: 0; flex-grow: 1; }
+.time-inputs span { font-size: 0.9em; margin: 0 3px; }
+
+
+.placeholder-activation { margin-bottom: 8px; }
+.placeholder-group { margin-top: 10px; margin-bottom: 15px; padding-left: 15px; border-left: 3px solid #eee; transition: border-color 0.2s ease; }
+.placeholder-controls { }
+.placeholder-field { margin-bottom: 15px; }
+ .placeholder-field > div { margin-bottom: 8px; } .placeholder-field > div:last-child { margin-bottom: 0; }
+ .placeholder-field label { margin-bottom: 3px; font-size: 0.9em; font-weight: bold; transition: color 0.2s ease; }
+ .placeholder-field select, .placeholder-field input { margin-bottom: 0; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+
+
+textarea { width: 100%; min-height: 80px; font-family: inherit; font-size: inherit; margin-bottom: 5px; transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+
+
+
+
+/* Status/Results Area */
+#statusMessage { margin-top: 15px; text-align: center; font-weight: bold; min-height: 1.2em; }
+.status-error { color: red; }
+.status-success { color: green; }
+#resultsView h4 { margin-bottom: 10px; } #errorReportSection { display: none; }
+#errorList { max-height: 200px; overflow-y: auto; background-color: #f9f9f9; border: 1px solid #eee; padding: 10px; margin-top: 10px; font-size: 0.9em; }
+#errorList ul { list-style: none; padding: 0; margin: 0; }
+#errorList li { padding: 3px 0; border-bottom: 1px dotted #ddd; } #errorList li:last-child { border-bottom: none; }
+#errorList .report-category { font-weight: bold; margin-top: 8px; margin-bottom: 3px; font-size: 1.05em; }
+#errorList .report-category:first-child { margin-top: 0; }
+#errorList .report-item { padding-left: 15px; }
+#errorList .report-item.success { color: green; }
+#errorList .report-item.no-slot { color: orange; }
+#errorList .report-item.error { color: red; }
+.result-actions { text-align: center; margin-top: 20px; }
+/* Loading State */
+#loadingState { display: none; text-align: center; padding: 30px 15px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; }
+#loadingState p { margin-bottom: 15px; } #loadingState small { color: #666; }
+.loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 15px auto; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+
+<div id="formContent">
+<div class="form-group">
+  <h3>Core settings</h3>
+  <label for="operatorColumn" class="required">Trigger column</label>
+  <select id="operatorColumn"></select>
+  <p class="info-note">Select the column containing the trigger value '1'. Rows marked with '1' will be processed; other values or empty cells will be ignored.</p>
+
+
+  <label for="recipientColumn" class="required">Recipient email column</label>
+  <select id="recipientColumn"></select>
+  <p class="info-note">If a cell contains multiple email addresses, separate them with a semicolon followed by a space (e.g., <code>abc@example.com; def@example.com</code>).</p>
+
+
+  <label for="title" class="required">Call title</label>
+  <input type="text" id="title" placeholder="Enter call title" required>
+  <p class="info-note">Placeholders (defined below) can be used in the title.</p>
+
+
+  <label for="duration" class="required">Call duration (minutes)</label>
+  <input type="number" id="duration" min="5" max="120" placeholder="Enter duration, min 5" required>
+
+
+  <label for="buffer" class="label-bold">Buffer time between calls (minutes)</label>
+  <input type="number" id="buffer" min="0" max="90" placeholder="Enter buffer, default 0">
+</div>
+
+
+
+
+<div class="form-group">
+  <h3>Scheduling window</h3>
+  <label for="startDate" class="required">Scheduling start date:</label>
+  <input type="date" id="startDate" required>
+
+
+  <label for="endDate" class="required">Scheduling end date:</label>
+  <input type="date" id="endDate" required>
+</div>
+
+
+<div class="form-group">
+  <h3 class="required">Availability settings</h3>
+  <p class="info-note">Set your working hours for each day within the scheduling window. Uncheck days you are unavailable.</p>
+
+
+  <div class="day-availability" id="mondaySection">
+    <div class="day-label-line">
+      <input type="checkbox" id="mondayAvailable">
+      <label for="mondayAvailable" class="day-label">Monday</label>
+    </div>
+    <div class="day-controls">
+      <div class="time-inputs"><span>From:</span><input type="time" id="mondayStartTime"> <span>to</span> <input type="time" id="mondayEndTime"></div>
+    </div>
+  </div>
+  <div class="day-availability" id="tuesdaySection">
+      <div class="day-label-line">
+        <input type="checkbox" id="tuesdayAvailable">
+        <label for="tuesdayAvailable" class="day-label">Tuesday</label>
+      </div>
+      <div class="day-controls">
+        <div class="time-inputs"><span>From:</span><input type="time" id="tuesdayStartTime"> <span>to</span> <input type="time" id="tuesdayEndTime"></div>
+      </div>
+    </div>
+    <div class="day-availability" id="wednesdaySection">
+      <div class="day-label-line">
+        <input type="checkbox" id="wednesdayAvailable">
+        <label for="wednesdayAvailable" class="day-label">Wednesday</label>
+      </div>
+      <div class="day-controls">
+        <div class="time-inputs"><span>From:</span><input type="time" id="wednesdayStartTime"> <span>to</span> <input type="time" id="wednesdayEndTime"></div>
+      </div>
+    </div>
+    <div class="day-availability" id="thursdaySection">
+      <div class="day-label-line">
+        <input type="checkbox" id="thursdayAvailable">
+        <label for="thursdayAvailable" class="day-label">Thursday</label>
+      </div>
+      <div class="day-controls">
+        <div class="time-inputs"><span>From:</span><input type="time" id="thursdayStartTime"> <span>to</span> <input type="time" id="thursdayEndTime"></div>
+      </div>
+    </div>
+    <div class="day-availability" id="fridaySection">
+      <div class="day-label-line">
+        <input type="checkbox" id="fridayAvailable">
+        <label for="fridayAvailable" class="day-label">Friday</label>
+      </div>
+      <div class="day-controls">
+        <div class="time-inputs"><span>From:</span><input type="time" id="fridayStartTime"> <span>to</span> <input type="time" id="fridayEndTime"></div>
+      </div>
+    </div>
+    <div class="day-availability" id="saturdaySection">
+      <div class="day-label-line">
+        <input type="checkbox" id="saturdayAvailable">
+        <label for="saturdayAvailable" class="day-label">Saturday</label>
+      </div>
+      <div class="day-controls">
+        <div class="time-inputs"><span>From:</span><input type="time" id="saturdayStartTime"> <span>to</span> <input type="time" id="saturdayEndTime"></div>
+      </div>
+    </div>
+    <div class="day-availability" id="sundaySection">
+      <div class="day-label-line">
+        <input type="checkbox" id="sundayAvailable">
+        <label for="sundayAvailable" class="day-label">Sunday</label>
+      </div>
+      <div class="day-controls">
+        <div class="time-inputs"><span>From:</span><input type="time" id="sundayStartTime"> <span>to</span> <input type="time" id="sundayEndTime"></div>
+      </div>
+    </div>
+    </div>
+
+
+<div id="descriptionSection" class="form-group optional-group">
+  <h3>Meeting description settings</h3>
+  <div id="descriptionControls"> <p class="info-note" style="margin-top: 0;">Define placeholders used in the Call Title or Description Text. Placeholders <strong>must</strong> be enclosed in double curly brackets (e.g., <code>{{ContactName}}</code>). Enter that <strong>exact</strong> placeholder tag (including brackets) into the 'Placeholder Tag' box below, and select the corresponding sheet Column containing the data. Only perfectly matching tags will be replaced.</p>
+
+
+      <div id="placeholder1Group" class="placeholder-group inactive">
+        <div class="placeholder-activation">
+          <input type="checkbox" id="activatePlaceholder1"><label for="activatePlaceholder1" class="inline-label">Activate Placeholder 1</label>
+        </div>
+        <div class="placeholder-controls">
+          <div class="placeholder-field">
+            <div><label for="placeholder1Col">Column</label><select id="placeholder1Col" disabled></select></div>
+            <div><label for="placeholder1Name">Placeholder Tag</label><input type="text" id="placeholder1Name" placeholder="{{PlaceholderName}}" disabled></div>
+          </div>
+        </div>
+      </div>
+      <div id="placeholder2Group" class="placeholder-group inactive">
+        <div class="placeholder-activation">
+          <input type="checkbox" id="activatePlaceholder2" disabled><label for="activatePlaceholder2" class="inline-label">Activate Placeholder 2</label>
+        </div>
+        <div class="placeholder-controls">
+          <div class="placeholder-field">
+            <div><label for="placeholder2Col">Column</label><select id="placeholder2Col" disabled></select></div>
+            <div><label for="placeholder2Name">Placeholder Tag</label><input type="text" id="placeholder2Name" placeholder="{{PlaceholderName}}" disabled></div>
+          </div>
+        </div>
+      </div>
+      <div id="placeholder3Group" class="placeholder-group inactive">
+        <div class="placeholder-activation">
+          <input type="checkbox" id="activatePlaceholder3" disabled><label for="activatePlaceholder3" class="inline-label">Activate Placeholder 3</label>
+        </div>
+        <div class="placeholder-controls">
+          <div class="placeholder-field">
+            <div><label for="placeholder3Col">Column</label><select id="placeholder3Col" disabled></select></div>
+            <div><label for="placeholder3Name">Placeholder Tag</label><input type="text" id="placeholder3Name" placeholder="{{PlaceholderName}}" disabled></div>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; margin-top: 20px; margin-bottom: 15px;">
+          <input type="checkbox" id="enableDescription" style="margin-bottom: 0;">
+          <label for="enableDescription" style="margin-bottom: 0; margin-left: 5px; display:inline;" class="inline-label">Add meeting description</label>
+      </div>
+      <label for="description">Description Text</label>
+      <textarea id="description" placeholder="Enter meeting description..." disabled></textarea>
+      </div> </div> <div class="button-container">
+  <button id="scheduleButton">Start</button>
+</div>
+<div id="statusMessage"></div>
+</div>
+
+
+<div id="loadingState" style="display: none;">
+  <p><strong>Processing... Please wait.</strong></p>
+  <div class="loader"></div>
+  <p><small>This may take a few moments depending on the number of rows being processed.</small></p>
+</div>
+
+
+<div id="resultsView" style="display: none;">
+  <h4 id="resultsTitle">Scheduling Complete</h4>
+  <p id="processedCountMessage"></p>
+  <div id="errorReportSection">
+      <h4>Scheduling Report</h4>
+      <div id="errorList"></div> </div>
+  <div class="result-actions">
+      <button id="runAgainButton">Configure new batch</button> <button id="sendReportButton" disabled>Send report to inbox</button>
+      <button id="closeButton">Close</button>
+  </div>
+</div>
+
+
+<script>
+ // Store results globally for potential email sending
+ let currentResults = null;
+
+
+ // --- Helper Functions ---
+ const allColumnLetters = (() => { const letters = []; for (let i = 0; i < 26; i++) letters.push(String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('A' + String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('B' + String.fromCharCode(65 + i)); return letters; })();
+ function populateDropdown(id, allowNone = false) { const select = document.getElementById(id); if (!select) return; select.innerHTML = ''; const d=document.createElement("option"); d.value=""; d.textContent=allowNone?"None":"Select column"; d.disabled=!allowNone; d.selected=true; select.appendChild(d); allColumnLetters.forEach(l => { const o=document.createElement("option"); o.value=l; o.textContent=l; select.appendChild(o); }); }
+ // --- Element References ---
+ const formContent = document.getElementById('formContent'), loadingState = document.getElementById('loadingState'), resultsView = document.getElementById('resultsView'), scheduleButton = document.getElementById('scheduleButton'), statusMessage = document.getElementById('statusMessage'), processedCountMessage = document.getElementById('processedCountMessage'), errorReportSection = document.getElementById('errorReportSection'), errorList = document.getElementById('errorList'), closeButton = document.getElementById('closeButton'), runAgainButton = document.getElementById('runAgainButton'), sendReportButton = document.getElementById('sendReportButton'), resultsTitle = document.getElementById('resultsTitle');
+ const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+ const dayControls = {}; daysOfWeek.forEach(day => { dayControls[day] = { section: document.getElementById(day + 'Section'), checkbox: document.getElementById(day + 'Available'), startTime: document.getElementById(day + 'StartTime'), endTime: document.getElementById(day + 'EndTime') }; });
+ const enableDescCheckbox = document.getElementById('enableDescription'), descriptionControlsDiv = document.getElementById('descriptionControls'), descTextarea = document.getElementById('description');
+ const descPhCheckboxes = [document.getElementById('activatePlaceholder1'), document.getElementById('activatePlaceholder2'), document.getElementById('activatePlaceholder3')];
+ const descPhControls = [1, 2, 3].map(i => ({ group: document.getElementById(`placeholder${i}Group`), colSelect: document.getElementById(`placeholder${i}Col`), nameInput: document.getElementById(`placeholder${i}Name`) }));
+
+
+ // --- State Update Functions ---
+ function updateDayAvailabilityState(day) {
+   const c = dayControls[day];
+   if (!c || !c.checkbox || !c.startTime || !c.endTime || !c.section) return;
+   const isChecked = c.checkbox.checked;
+   c.startTime.disabled = !isChecked;
+   c.endTime.disabled = !isChecked;
+   c.section.classList.toggle('inactive', !isChecked);
+   if (!isChecked) {
+     c.startTime.value = '';
+     c.endTime.value = '';
+   }
+ }
+
+
+ function updateDescriptionState() {
+    if (!enableDescCheckbox || !descriptionControlsDiv || !descTextarea) return;
+    const isEnabled = enableDescCheckbox.checked;
+    descTextarea.disabled = !isEnabled;
+    descriptionControlsDiv.classList.toggle('inactive', !isEnabled);
+    if (!isEnabled) {
+      // Optionally clear textarea when disabled
+      // descTextarea.value = '';
+    }
+ }
+
+
+  function updatePlaceholderStates() {
+    descPhCheckboxes.forEach((checkbox, index) => {
+        if (!checkbox) return;
+        const controls = descPhControls[index];
+        if (!controls || !controls.group || !controls.colSelect || !controls.nameInput) return;
+
+
+        const isPreviousChecked = (index === 0) || (descPhCheckboxes[index - 1] && descPhCheckboxes[index - 1].checked);
+        checkbox.disabled = !isPreviousChecked;
+        if (!isPreviousChecked) {
+            checkbox.checked = false;
+        }
+
+
+        const isCurrentActive = checkbox.checked && !checkbox.disabled;
+        populateDropdown(controls.colSelect.id, !isCurrentActive);
+        controls.colSelect.disabled = !isCurrentActive;
+        controls.nameInput.disabled = !isCurrentActive;
+        controls.group.classList.toggle('inactive', !isCurrentActive);
+
+
+        if (!isCurrentActive) {
+            controls.nameInput.value = "";
+            controls.colSelect.value = "";
+        } else {
+            if (!controls.colSelect.value) controls.colSelect.value = "";
+        }
+    });
+ }
+
+
+
+
+ function showFormView() {
+   if (statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
+   if (resultsView) resultsView.style.display = 'none';
+   if (loadingState) loadingState.style.display = 'none';
+   if (formContent) formContent.style.display = 'block';
+   if (scheduleButton) scheduleButton.disabled = false;
+   currentResults = null;
+   // Ensure the Send Report button is disabled when showing the form view
+   if (sendReportButton) sendReportButton.disabled = true;
+ }
+
+
+ function isValidTimeFormat(t) { if(!t) return false; return /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/.test(t); }
+
+
+ // --- Event Handlers ---
+ function handleButtonClick() {
+       statusMessage.textContent=''; statusMessage.className='';
+       let errors=[]; // Array to hold validation errors
+       const formData={
+           operatorColumn:document.getElementById('operatorColumn').value,
+           recipientColumn:document.getElementById('recipientColumn').value,
+           title:document.getElementById('title').value.trim(),
+           duration:document.getElementById('duration').value,
+           buffer:(document.getElementById('buffer').value.trim()||'0'),
+           startDate:document.getElementById('startDate').value,
+           endDate:document.getElementById('endDate').value,
+           availability:{},
+           enableDescription:enableDescCheckbox.checked,
+           description:descTextarea?descTextarea.value.trim():"",
+           placeholders: []
+       };
+
+
+       // --- Validation ---
+
+
+       // Validation: Core Settings
+       if(!formData.operatorColumn)errors.push('Select Trigger column.');
+       if(!formData.recipientColumn)errors.push('Select Recipient email column.');
+       if(!formData.title)errors.push('Enter Call title.');
+       if(!formData.duration||isNaN(parseInt(formData.duration))||parseInt(formData.duration)<5)errors.push('Enter valid Duration (min 5).');
+       if(isNaN(parseInt(formData.buffer))||parseInt(formData.buffer)<0)errors.push('Enter valid Buffer time (0+).');
+
+
+       // Validation: Scheduling Window
+       if(!formData.startDate)errors.push('Select Start date.');
+       if(!formData.endDate)errors.push('Select End date.');
+       if(formData.startDate&&formData.endDate&&formData.startDate>formData.endDate)errors.push('Start date cannot be after End date.');
+
+
+       // Validation: Availability
+       let isAnyDayAvailable=false;
+       daysOfWeek.forEach(day=>{
+           const ctrl=dayControls[day];
+           const dayData={ available:ctrl.checkbox.checked, start:ctrl.startTime.value, end:ctrl.endTime.value };
+           formData.availability[day.charAt(0).toUpperCase()+day.slice(1)]=dayData;
+           if(dayData.available){
+               isAnyDayAvailable=true;
+               const dayName = day.charAt(0).toUpperCase()+day.slice(1);
+               if(!isValidTimeFormat(dayData.start))errors.push(`${dayName} start time invalid (HH:MM).`);
+               if(!isValidTimeFormat(dayData.end))errors.push(`${dayName} end time invalid (HH:MM).`);
+               if(isValidTimeFormat(dayData.start)&&isValidTimeFormat(dayData.end)&&dayData.start>=dayData.end)errors.push(`${dayName} Start Time must be before End Time.`);
+           }
+       });
+       if(!isAnyDayAvailable)errors.push('Select at least one available day/time range.');
+
+
+       // Validation: Placeholders
+       const activePlaceholdersColumns = [];
+       descPhCheckboxes.forEach((checkbox, index)=>{
+           if (checkbox && checkbox.checked && !checkbox.disabled) {
+               const num = index + 1;
+               const controls = descPhControls[index];
+               const colVal = controls.colSelect.value;
+               const nameVal = controls.nameInput.value.trim();
+               if (!colVal) errors.push(`Placeholder ${num} is active, please select its Column.`);
+               if (!nameVal) errors.push(`Placeholder ${num} is active, please enter its Placeholder Tag.`);
+               else if (!(nameVal.startsWith('{{') && nameVal.endsWith('}}') && nameVal.length > 4)) {
+                   errors.push(`Placeholder ${num} Tag ('${nameVal}') must be in {{PlaceholderName}} format.`);
+               }
+               formData.placeholders.push({ col: colVal, name: nameVal });
+               if (colVal) activePlaceholdersColumns.push(colVal);
+           }
+       });
+
+
+       // Validation: Description
+       if(formData.enableDescription && !formData.description) {
+           // errors.push('Description is enabled but the text area is empty.'); // Optional
+       }
+
+
+       // Validation: Duplicate Columns
+       const columnsToCheck = [formData.operatorColumn, formData.recipientColumn, ...activePlaceholdersColumns];
+       const validColumns = columnsToCheck.filter(col => col && col !== "");
+       if (validColumns.length > 1) {
+           if (new Set(validColumns).size < validColumns.length) {
+               errors.push('Duplicate column selection detected. Each selected column must be unique.');
+           }
+       }
+
+
+       // --- Display Errors or Proceed ---
+       if(errors.length>0){
+           if(statusMessage){
+               statusMessage.innerHTML='Error:<br>'+errors.join('<br>');
+               statusMessage.className='status-error';
+           }
+           return;
+       }
+
+
+       // --- If validation passes ---
+       formContent.style.display='none';
+       resultsView.style.display='none';
+       loadingState.style.display='block';
+       scheduleButton.disabled=true;
+
+
+       console.log("Calling processMassScheduling with:",formData);
+       google.script.run
+           .withSuccessHandler(onSuccess)
+           .withFailureHandler(onFailure)
+           .processMassScheduling(formData);
+   }
+
+
+ /**
+  * Handles successful backend execution.
+  * Assumes resultObject structure: { processedRowCount, scheduled:[], noSlot:[], errors:[] }
+  */
+ function onSuccess(resultObject) {
+      console.log("onSuccess received:", resultObject);
+      loadingState.style.display = 'none';
+
+
+      if (!resultObject || typeof resultObject.processedRowCount === 'undefined' ||
+          !Array.isArray(resultObject.scheduled) || !Array.isArray(resultObject.noSlot) || !Array.isArray(resultObject.errors)) {
+          console.error("Invalid result object structure:", resultObject);
+          onFailure(new Error("Received invalid data structure from server."));
+          return;
+      }
+      currentResults = resultObject; // Store for email report
+
+
+      resultsTitle.textContent = `Scheduling Process Complete`;
+      processedCountMessage.textContent = `Attempted to schedule calls for ${resultObject.processedRowCount} triggered row(s). See report below.`;
+      errorList.innerHTML = '';
+      const ul = document.createElement('ul');
+
+
+      const addReportItems = (category, items, cssClass, showDetails = true) => {
+            if (items.length > 0) {
+                const categoryHeader = document.createElement('div');
+                categoryHeader.className = 'report-category';
+                categoryHeader.textContent = `${category} (${items.length})`;
+                ul.appendChild(categoryHeader);
+                items.forEach(item => {
+                    const li = document.createElement('li');
+                    li.className = `report-item ${cssClass}`;
+                    let text = `Row ${item.row || '?'}: ${item.recipient || 'Recipient N/A'}`;
+                    if (showDetails && item.details) { text += ` - ${item.details}`; }
+                    li.textContent = text;
+                    ul.appendChild(li);
+                });
+            }
+      };
+
+
+        addReportItems('Scheduled Successfully', resultObject.scheduled, 'success', false);
+        addReportItems('Unscheduled (No Time Slot)', resultObject.noSlot, 'no-slot');
+        addReportItems('Other Errors', resultObject.errors, 'error');
+
+
+      if (ul.children.length === 0) {
+          const li = document.createElement('li');
+          li.textContent = resultObject.processedRowCount > 0 ? "Processing completed, but no specific status updates were generated." : "No rows marked with '1' found to process.";
+          ul.appendChild(li);
+      }
+
+
+      errorList.appendChild(ul);
+      errorReportSection.style.display = 'block';
+      resultsView.style.display = 'block';
+      // The sendReportButton variable is removed, so no need to enable/disable it here.
+ }
+
+
+ function onFailure(error) {
+      console.error("onFailure received:", error);
+      showFormView();
+      statusMessage.textContent = 'Fatal Script Error: ' + (error.message || 'Unknown error. Check script logs.');
+      statusMessage.className = 'status-error';
+      if(scheduleButton) scheduleButton.disabled = false;
+ }
+
+
+ // The handleSendReport function is removed as the button is removed.
+ // function handleSendReport() { /* ... */ }
+
+
+ // --- Initial Setup ---
+ document.addEventListener('DOMContentLoaded', () => {
+   try {
+     ['operatorColumn','recipientColumn','placeholder1Col','placeholder2Col','placeholder3Col'].forEach(id => populateDropdown(id, false));
+
+
+     daysOfWeek.forEach(day => {
+         const ctrl = dayControls[day];
+         if (ctrl && ctrl.checkbox) {
+             ctrl.checkbox.addEventListener('change', () => updateDayAvailabilityState(day));
+             updateDayAvailabilityState(day); // Set initial state
+         }
+     });
+
+
+     if (enableDescCheckbox) { enableDescCheckbox.addEventListener('change', updateDescriptionState); }
+     descPhCheckboxes.forEach(checkbox => { if (checkbox) { checkbox.addEventListener('change', updatePlaceholderStates); } });
+     updateDescriptionState(); // Set initial state
+     updatePlaceholderStates(); // Set initial state
+
+
+
+
+     if (scheduleButton) scheduleButton.addEventListener('click', handleButtonClick);
+     if (closeButton) closeButton.addEventListener('click', () => google.script.host.close());
+     if (runAgainButton) runAgainButton.addEventListener('click', showFormView);
+     // The event listener for 'sendReportButton' is removed as the button is removed.
+     // if (sendReportButton) sendReportButton.addEventListener('click', handleSendReport);
+
+
+     showFormView();
+     console.log("Scheduler Sidebar UI Initialized");
+   } catch (initError) {
+     console.error("Sidebar Init Error:", initError);
+     document.body.innerHTML = `<p style="color:red; padding:15px;">Critical Error initializing sidebar: ${initError.message}. Please reload.</p>`;
+   }
+ });
+</script>
+
+
+</body>
+</html>
