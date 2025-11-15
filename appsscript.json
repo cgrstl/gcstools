@@ -1,0 +1,41 @@
+{
+  "timeZone": "Europe/Dublin",
+  "dependencies": {
+    "enabledAdvancedServices": [
+      {
+        "userSymbol": "Calendar",
+        "version": "v3",
+        "serviceId": "calendar"
+      },
+      {
+        "userSymbol": "Drive",
+        "version": "v3",
+        "serviceId": "drive"
+      }
+    ]
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets.currentonly",
+    "https://www.googleapis.com/auth/script.container.ui",
+    "https://adwords.google.com/api/adwords/cm",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/script.projects.readonly"
+  ],
+  "addOns": {
+    "common": {
+      "name": "GCS Tools",
+      "logoUrl": "https://static-00.iconduck.com/assets.00/tools-icon-2046x2048-62tkwxkm.png",
+      "homepageTrigger": {
+        "runFunction": "onGCSToolsHomepage"
+      }
+    },
+    "sheets": {}
+  }
+}
