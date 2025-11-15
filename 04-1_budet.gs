@@ -2,8 +2,6 @@
  * @file 04-1_budgetsender.gs
  * @description Core function for fetching Google Ads data, generating the dynamic 
  * PDF report, inserting content blocks into the draft, and saving the personalized draft.
- * NOTE: This script integrates shared utility functions and requires the user to insert 
- * specific code for the InternalAdsApp and Gmail Draft Retrieval.
  * @OnlyCurrentDoc
  * @Needs GmailApp
  * @Needs SpreadsheetApp
@@ -74,14 +72,11 @@ const GAQL_QUERY_4_RECOMMENDATIONS = `
 
 
 // ================================================================
-// CORE PROCESSING FUNCTION (Replaces the generic processEmailRequest)
+// CORE PROCESSING FUNCTION (Called by the new sidebar)
 // ================================================================
 
 /**
  * Processes a Budget Recommendation request from the sidebar.
- * Fetches Google Ads data, performs calculations, conditionally generates a PDF report,
- * and saves a personalized draft for each triggered row.
- * * This function is the new processEmailRequest called by the 04_2_budgetsidebar.html.
  * @param {object} formData An object containing user selections.
  * @returns {object} A categorized results object for the sidebar.
  */
@@ -132,11 +127,11 @@ function processEmailRequest(formData) {
             const ccRaw = (ccColIndex !== -1 && ccColIndex < rowData.length) ? (rowData[ccColIndex]?.toString().trim() ?? "") : "";
             
             try {
-                // --- 2.1 CID Validation & Conversion (Requires InternalAdsApp access) ---
+                // --- 2.1 CID Validation & Conversion (Uses globally available InternalAdsApp) ---
                 let apiCid;
                 if (!cidRaw) throw new Error("Missing Google Ads Client ID.");
                 
-                // **CID LOOKUP** (Uses InternalAdsApp implementation)
+                // Uses the global InternalAdsApp object for CID lookup/validation
                 const externalIds = InternalAdsApp.getExternalCustomerIds([cidRaw]); 
                 if (externalIds && externalIds[cidRaw]) {
                     // Assuming externalIds[cidRaw] returns XXX-XXX-XXXX format
@@ -176,11 +171,11 @@ function processEmailRequest(formData) {
                 
                 const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap); 
                 
-                const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders); 
+                const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
                 
-                let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders); 
+                let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
                 // Replace Block placeholder with generated HTML table ([BUDGET_TABLE] assumed)
-                finalBodyHtml = finalBodyHtml.replace('[BUDGET_TABLE]', tableHtml); 
+                finalBodyHtml = finalBodyHtml.replace('[BUDGET_TABLE]', tableHtml);
 
                 // --- 2.5 PDF REPORT GENERATION (CONDITIONAL) ---
                 
@@ -188,7 +183,7 @@ function processEmailRequest(formData) {
                 const finalAttachments = [...emailTemplate.attachments];
                 
                 if (formData.enablePdfAttachment && budgetLimitedCampaigns.length > 0) {
-                    pdfBlob = createCampaignReportPdf(budgetLimitedCampaigns, clientCurrencyCode, apiCid); 
+                    pdfBlob = createCampaignReportPdf(budgetLimitedCampaigns, clientCurrencyCode, apiCid);
                     if (pdfBlob) {
                         finalAttachments.push(pdfBlob);
                     }
@@ -234,40 +229,69 @@ function processEmailRequest(formData) {
 
 
 // ================================================================
-// ***CRITICAL PLACEHOLDERS: ADS API & DRAFT RETRIEVAL***
-// (MUST BE REPLACED WITH YOUR PROJECT'S WORKING CODE)
+// INTEGRATED CUSTOM AND UTILITY FUNCTIONS
 // ================================================================
 
 /**
  * Finds a unique Gmail draft matching the subject line and extracts its content.
- * (BODY FROM 01-1_emails.gs)
- * @throws {Error} If no draft or multiple drafts are found.
+ * (Integrated from 01-1_emails.gs)
  */
 function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
-  // ***REPLACE BODY: Paste the full implementation from your existing 01-1_emails.gs file here.***
-  
-  // NOTE: The original function body is large (lines 418-434 in 01-1_emails.gs)
-  // Ensure you copy the entire body, including logic for attachments and inline images.
-  throw new Error("Placeholder function 'getGmailTemplateFromDrafts__emails' called. Replace with actual implementation.");
-}
+  Logger.log(`Searching for Gmail draft with subject: "${subject_line}" (Require unique: ${requireUnique})`);
+  if (!subject_line || subject_line.trim() === "") {
+    throw new Error("Subject line for draft template cannot be empty.");
+  }
+  const drafts = GmailApp.getDrafts();
+  const matchingDrafts = drafts.filter(d => d.getMessage().getSubject() === subject_line);
 
-/** Placeholder for your Ads API wrapper object. */
-const InternalAdsApp = {
-    getExternalCustomerIds: (cids) => {
-        // ***REPLACE BODY: Paste the full CID validation/lookup implementation from your project here.***
-        const mockResult = {};
-        mockResult[cids[0]] = cids[0]; 
-        return mockResult; 
-    },
-    search: (requestJson, options) => {
-        // ***REPLACE BODY: Paste the full GAQL execution logic (connecting to Google Ads API) here.***
-        throw new Error("Placeholder function 'InternalAdsApp.search' called. Replace with actual implementation returning GAQL JSON data.");
+  if (matchingDrafts.length === 0) { throw new Error(`No Gmail draft found with subject: "${subject_line}"`); }
+  if (requireUnique && matchingDrafts.length > 1) { throw new Error(`Multiple Gmail drafts (${matchingDrafts.length}) found with subject: "${subject_line}". Please ensure only one draft has this exact subject.`); }
+
+  const draft = matchingDrafts[0];
+  const msg = draft.getMessage();
+  let attachments = [];
+  let inlineImages = [];
+
+  try {
+    const regularAttachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
+    if (regularAttachments && regularAttachments.length > 0) {
+      attachments = regularAttachments.map(a => {
+        try { return a.copyBlob(); } catch (cbErr) { Logger.log(`Could not copy attachment blob "${a.getName()}": ${cbErr.message}`); return null; }
+      }).filter(b => b !== null);
     }
-};
+  } catch (e) {
+    Logger.log(`Could not get attachments for draft "${subject_line}": ${e.message}`);
+  }
 
-// ================================================================
-// INTEGRATED UTILITY FUNCTIONS (FROM helperstools.gs)
-// ================================================================
+  try {
+    const rawInlineImages = msg.getAttachments({ includeInlineImages: true, includeAttachments: false });
+    if (rawInlineImages && rawInlineImages.length > 0) {
+      rawInlineImages.forEach(img => {
+        const headers = img.getHeaders();
+        const cidHeader = headers && headers['Content-ID'];
+        const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
+
+        if (cid) {
+          try { inlineImages[cid] = img.copyBlob(); } catch (cbErr) { Logger.log(`Could not copy inline image blob "${img.getName()}" (CID: ${cid}): ${cbErr.message}`);}
+        } else {
+          Logger.log(`Warning: Found inline image named "${img.getName()}" without a Content-ID in draft "${subject_line}". It might not display correctly if referenced by CID.`);
+        }
+      });
+    }
+  } catch (e) {
+    Logger.log(`Could not get inline images for draft "${subject_line}": ${e.message}`);
+  }
+
+  Logger.log(`Template extracted. Subject: "${msg.getSubject()}", Attachments: ${attachments.length}, Inline Images: ${Object.keys(inlineImages).length}`);
+  return {
+    message: {
+      text: msg.getPlainBody() || "",
+      html: msg.getBody() || ""
+    },
+    attachments: attachments,
+    inlineImages: inlineImages
+  };
+}
 
 /**
  * Converts a column letter (e.g., "A", "B", "AA") to its 0-based index for a given sheet.
@@ -312,7 +336,7 @@ function getTriggeredRows_(sheet, triggerColIndex) {
     const currentRow = allValues[i];
     if (triggerColIndex >= currentRow.length) { continue; }
 
-    const triggerValue = String(currentRow[triggerColIndex] || '').trim(); 
+    const triggerValue = String(currentRow[triggerColIndex] || '').trim();
 
     if (triggerValue === "1") {
       triggeredRows.push({
@@ -351,10 +375,6 @@ function fillPlaceholdersInString_(templateString, placeholderDataMap) {
   });
 }
 
-// ================================================================
-// NEW LOGIC FUNCTIONS (Integrated)
-// ================================================================
-
 /** Executes GAQL query, replaces date placeholders, and calls InternalAdsApp.search. */
 function executeGAQLQuery(clientId, query, options = {}) {
   let finalQuery = query;
@@ -368,6 +388,7 @@ function executeGAQLQuery(clientId, query, options = {}) {
     query: finalQuery
   };
   
+  // This relies on InternalAdsApp.search being globally defined.
   const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
   return JSON.parse(responseJson);
 }
@@ -380,15 +401,23 @@ function buildBccString_(toggles) {
     return bccAddresses.join(', ') || undefined;
 }
 
-/** Determines the 7-day date range for segmented queries. */
+/**
+ * Determines the 7-day date range for segmented queries, excluding the current partial day.
+ * (Pulls 7 full days ending yesterday.)
+ */
 function get7DayDateRange_() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const timeZone = ss.getSpreadsheetTimeZone() || "Europe/Dublin"; 
     
+    // 1. Set EndDate to Yesterday
     const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(endDate.getDate() - 7); 
+    endDate.setDate(endDate.getDate() - 1); 
     
+    // 2. Set StartDate to 7 full days before Yesterday (i.e., 8 days ago)
+    const startDate = new Date(endDate.getTime());
+    startDate.setDate(endDate.getDate() - 6); 
+    
+    // Ensure both dates are formatted for GAQL
     return {
         startDateStr: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
         endDateStr: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
@@ -461,7 +490,7 @@ function mergeAndCalculateData(perfData, targetData, recommendationData, currenc
         c.CPA = c.conversions > 0 ? c.costMicros / c.conversions : Infinity;
         c.ROAS = c.costMicros > 0 ? c.conversionsValue / c.costMicros : 0;
         const totalDailyBudgetMicros = c.budgetMicros * 7;
-        c.budgetDepletion = totalDailyBudgetMicros > 0 ? c.costMicros / totalDailyBudgetMicros : 0; 
+        c.budgetDepletion = totalDailyBudgetMicros > 0 ? c.costMicros / totalDailyBudgetMicros : 0;
         
         // Lost Conversions
         if (c.type === 'SEARCH' || c.type === 'DISPLAY') {
@@ -579,7 +608,7 @@ function generateBudgetTableHtml(campaignsData, currencyCode) {
 
 /** Generates the PDF blob from the campaigns data. */
 function createCampaignReportPdf(campaignsData, currencyCode, clientId) {
-    const reportHtml = generateBudgetTableHtml(campaignsData, currencyCode); 
+    const reportHtml = generateBudgetTableHtml(campaignsData, currencyCode);
 
     const pdfTitle = `Budget Report - ${clientId} - ${new Date().toLocaleDateString()}`;
     const fullHtml = `
