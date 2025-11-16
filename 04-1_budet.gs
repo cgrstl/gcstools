@@ -98,17 +98,25 @@ function processEmailRequest(formData) {
         const aiHtmlContent = getAiBudgetAnalysis_(cidRaw, formData.dateRange, reportDays);
         Logger.log(`Row ${sheetRowNumber}: AI analysis generated.`);
 
-        // --- 2.3 Alle Platzhalter vorbereiten ---
+        // --- 2.3 Alle Platzhalter vorbereiten (OHNE AI-INHALT) ---
         const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap);
         
-        // F?ge den speziellen KI-Platzhalter hinzu
-        // WICHTIG: Der Platzhalter im Gmail-Entwurf muss exakt {{ai_budget_recommendations}} lauten
-        rowDataForPlaceholders['{{ai_budget_recommendations}}'] = aiHtmlContent;
+        // HINWEIS: Der AI-Inhalt wird NICHT in rowDataForPlaceholders eingef?gt,
+        // da er NICHT escaped werden darf.
 
-        // --- 2.4 E-Mail-Inhalt finalisieren ---
+        // --- 2.4 E-Mail-Inhalt finalisieren (KORRIGIERTER WORKFLOW) ---
         const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
+        
+        // SCHRITT 1: Zuerst alle "normalen" Platzhalter f?llen (die escaped werden m?ssen)
         let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
-        const finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders); // Fallback-Text
+        let finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders);
+
+        // SCHRITT 2: JETZT den AI-HTML-Platzhalter manuell ersetzen, *ohne* Escaping
+        // Stellt sicher, dass der rohe HTML-Code von der KI direkt eingef?gt wird.
+        finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', aiHtmlContent);
+        
+        // (F?r den Plain-Text-Fallback ersetzen wir ihn auch, aber mit einer einfachen Meldung)
+        finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', '(Dynamische Budget-Analyse - siehe HTML-Version)');
 
         // Alle Anh?nge kombinieren
         const finalAttachments = [
@@ -247,7 +255,9 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
       const cidHeader = img.getHeaders()['Content-ID'];
       const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
       if (cid) {
-        inlineImages[cid] = img;
+        inlineImages[cid] = img.copyBlob(); // copyBlob() ist sicherer
+      } else {
+         Logger.log(`Warning: Found inline image named "${img.getName()}" without a Content-ID in draft "${subject_line}".`);
       }
     });
   } catch(e) {
@@ -316,6 +326,7 @@ function executeAiQuery_(clientId, query, dateRangeString) {
     finalQuery = query.replace('%DATE_RANGE%', dateRangeString);
   }
   const request = { customerId: clientId, query: finalQuery };
+  // Verwendet die globale InternalAdsApp
   const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
   return JSON.parse(responseJson).results || [];
 }
@@ -464,7 +475,6 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
   } catch (e) {
     Logger.log(`FATAL ERROR in getAiBudgetAnalysis_ (CID: ${cidRaw}): ${e.message}`);
     Logger.log(e.stack);
-    // Gib eine benutzerfreundliche Fehlermeldung zur?ck, die in die E-Mail eingef?gt werden kann
     return `<ul><li><b>Fehler bei der KI-Analyse f?r CID ${cidRaw}:</b> ${e.message}</li></ul>`;
   }
 }
