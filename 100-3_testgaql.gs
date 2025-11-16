@@ -1,121 +1,107 @@
 /**
- * DIAGNOSTIC FUNCTION: Search Impression Share
- * - Bypasses the broken 'get7DayDateRange_' helper to avoid Spreadsheet errors.
- * - Calculates dates locally using "Europe/Dublin".
- * - Runs 3 probes to check visibility of Search Campaigns vs. IS Metrics.
+ * Test function to verify Search Impression Share data retrieval.
+ * FIX: Uses AGGREGATION (removing segments.date from SELECT) to avoid data suppression.
+ * FIX: Scopes all constants internally to prevent global errors.
  */
-function diagnoseSearchIS() {
+function testSearchISMetrics() {
+
+  // --- 1. LOCAL CONSTANTS (Scoped to avoid conflicts) ---
+  const LOCAL_CID_RAW = '6652886860'; 
+  const LOCAL_DATE_START = 'YYYY-MM-DD_START';
+  const LOCAL_DATE_END = 'YYYY-MM-DD_END';
+
+  Logger.log(`\n=== STARTING SEARCH IS TEST (AGGREGATED) ===`);
+  Logger.log(`Target Internal CID: ${LOCAL_CID_RAW}`);
+
+  // --- 2. LOCAL HELPERS ---
   
-  const TEST_CID_RAW = '6652886860'; 
-
-  Logger.log(`\n=== STARTING DIAGNOSTIC FOR CID: ${TEST_CID_RAW} ===`);
-
-  try {
-    // 1. CID Conversion (Using Global InternalAdsApp)
-    const cidTrimmed = String(TEST_CID_RAW).trim();
-    const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
-    
-    if (!extIds || !extIds[cidTrimmed]) throw new Error("CID Lookup Failed");
-    const apiCid = extIds[cidTrimmed].replace(/-/g, '');
-    Logger.log(`> API CID: ${apiCid}`);
-
-    // 2. SAFE DATE CALCULATION (Local - No Spreadsheet Dependency)
-    // We hardcode the timezone to ensure this runs in the editor
-    const timeZone = "Europe/Dublin"; 
+  // Helper: Get Date Range (Safe from Spreadsheet Error)
+  const getSafeDateRange = () => {
+    const timeZone = "Europe/Dublin"; // Default from JSON
     const endDate = new Date();
     endDate.setDate(endDate.getDate() - 1); // Yesterday
     const startDate = new Date(endDate.getTime());
-    startDate.setDate(endDate.getDate() - 6); // 7 days ago
+    startDate.setDate(endDate.getDate() - 6); // 7 Days ago
     
-    const dateRange = {
-        startDateStr: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
-        endDateStr: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
+    return {
+        start: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
+        end: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
     };
-    Logger.log(`> Date Range: ${dateRange.startDateStr} to ${dateRange.endDateStr}`);
+  };
 
-    // --- PROBE 1: BASIC VISIBILITY ---
-    // Can we see ANY Search campaigns?
-    Logger.log('\n[PROBE 1] Checking Campaign Visibility (No IS metrics)...');
-    const Q1_BASIC = `
-      SELECT
-        campaign.id,
-        campaign.name,
-        metrics.impressions,
-        metrics.cost_micros,
-        segments.date
-      FROM
-        campaign
-      WHERE
-        campaign.status = 'ENABLED' 
-        AND campaign.advertising_channel_type = 'SEARCH'
-        AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
-    `;
-    // We use the global executeGAQLQuery, passing our safe local dates
-    const res1 = executeGAQLQuery(apiCid, Q1_BASIC, { dateRange: dateRange });
-    Logger.log(`> Rows Returned: ${res1.results?.length || 0}`);
+  // Helper: Execute Query
+  const executeLocalQuery = (clientId, query, dateRange) => {
+    let finalQuery = query
+      .replace(LOCAL_DATE_START, dateRange.start)
+      .replace(LOCAL_DATE_END, dateRange.end);
+      
+    const request = { customerId: clientId, query: finalQuery };
+    // Uses global InternalAdsApp
+    const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
+    return JSON.parse(responseJson).results || [];
+  };
+
+  try {
+    // --- 3. CID Conversion ---
+    const cidTrimmed = String(LOCAL_CID_RAW).trim();
+    const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
     
-    if (res1.results?.length > 0) {
-        const r = res1.results[0];
-        Logger.log(`> Sample: "${r.campaign.name}" | Impr: ${r.metrics.impressions} | Cost: ${r.metrics.costMicros}`);
+    let apiCid;
+    if (extIds && extIds[cidTrimmed]) {
+        apiCid = extIds[cidTrimmed].replace(/-/g, '');
     } else {
-        Logger.log("> WARNING: Probe 1 returned 0 rows. This means the API sees NO active Search campaigns with spend/impressions in this period.");
+        throw new Error(`CID Lookup Failed for ${LOCAL_CID_RAW}`);
     }
+    Logger.log(`> API CID Resolved: ${apiCid}`);
 
-    // --- PROBE 2: MAIN IS METRIC ONLY ---
-    // Does adding 'search_impression_share' break it?
-    Logger.log('\n[PROBE 2] Adding "search_impression_share"...');
-    const Q2_IS_ONLY = `
-      SELECT
-        campaign.id,
-        campaign.name,
-        metrics.impressions,
-        metrics.search_impression_share,
-        segments.date
-      FROM
-        campaign
-      WHERE
-        campaign.status = 'ENABLED' 
-        AND campaign.advertising_channel_type = 'SEARCH'
-        AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
-    `;
-    const res2 = executeGAQLQuery(apiCid, Q2_IS_ONLY, { dateRange: dateRange });
-    Logger.log(`> Rows Returned: ${res2.results?.length || 0}`);
-    
-    if (res2.results?.length > 0) {
-         Logger.log(`> Sample IS: ${res2.results[0].metrics.searchImpressionShare}`);
-    }
+    // --- 4. Date Setup ---
+    const dates = getSafeDateRange();
+    Logger.log(`> Date Range: ${dates.start} to ${dates.end}`);
 
-    // --- PROBE 3: FULL METRICS ---
-    // The target query with Lost Budget/Rank
-    Logger.log('\n[PROBE 3] Full Query (IS + Lost Budget + Lost Rank)...');
-    const Q3_FULL = `
+    // --- 5. Define Query (AGGREGATE VIEW) ---
+    // CRITICAL: 'segments.date' is removed from SELECT to get the 7-day summary.
+    const QUERY_SEARCH_IS_AGGREGATE = `
       SELECT
         campaign.id,
         campaign.name,
         metrics.search_impression_share,
         metrics.search_impression_share_lost_budget,
-        metrics.search_impression_share_lost_rank,
-        segments.date
+        metrics.search_impression_share_lost_rank
       FROM
         campaign
       WHERE
         campaign.status = 'ENABLED' 
         AND campaign.advertising_channel_type = 'SEARCH'
-        AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
+        AND segments.date BETWEEN '${LOCAL_DATE_START}' AND '${LOCAL_DATE_END}'
     `;
-    const res3 = executeGAQLQuery(apiCid, Q3_FULL, { dateRange: dateRange });
-    Logger.log(`> Rows Returned: ${res3.results?.length || 0}`);
+
+    // --- 6. Execute ---
+    Logger.log('\n[EXECUTING QUERY]...');
+    Logger.log(`Query: ${QUERY_SEARCH_IS_AGGREGATE}`);
+
+    const results = executeLocalQuery(apiCid, QUERY_SEARCH_IS_AGGREGATE, dates);
+
+    Logger.log(`> Rows Returned: ${results.length}`);
     
-    if (res3.results?.length > 0) {
-         const r = res3.results[0];
-         Logger.log(`> Sample: IS=${r.metrics.searchImpressionShare} | LostBudget=${r.metrics.searchImpressionShareLostBudget} | LostRank=${r.metrics.searchImpressionShareLostRank}`);
-    } else if (res2.results?.length > 0) {
-         Logger.log("> WARNING: Probe 2 worked but Probe 3 failed. The 'Lost' metrics might be causing the filter.");
+    if (results.length > 0) {
+        Logger.log("\n--- SUCCESS: DATA FOUND ---");
+        // Log the first 3 rows
+        const count = Math.min(results.length, 3);
+        for (let i = 0; i < count; i++) {
+            const row = results[i];
+            Logger.log(`Row ${i+1}: "${row.campaign.name}"`);
+            Logger.log(`   - Avg IS: ${row.metrics.searchImpressionShare}`);
+            Logger.log(`   - Avg Lost Budget: ${row.metrics.searchImpressionShareLostBudget}`);
+            Logger.log(`   - Avg Lost Rank: ${row.metrics.searchImpressionShareLostRank}`);
+        }
+    } else {
+        Logger.log("> WARNING: 0 rows returned. Even aggregated data is missing. This suggests the metrics are incompatible or the campaigns have absolutely zero traffic.");
     }
 
   } catch (e) {
     Logger.log(`\nFATAL ERROR: ${e.message}`);
     Logger.log(e.stack);
   }
-  Logger.log("\n=== DIAGNOSTIC COMPLETED ===");
+  
+  Logger.log("\n=== TEST COMPLETED ===");
 }
