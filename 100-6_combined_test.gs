@@ -215,18 +215,18 @@ function testUnifiedCampaignReportWithAI() {
 
 /**
  * Helper to call Gemini API using Script Property Key.
- * FIX: Uses 'gemini-1.5-flash-latest' to resolve "Model not found" errors.
+ * FIX: Uses 'gemini-2.5-flash' (Confirmed Available in Log).
  */
 function callGeminiAI_(campaignData) {
-  // 1. GET KEY FROM SCRIPT PROPERTIES (Secure)
+  // 1. GET KEY FROM SCRIPT PROPERTIES
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   
   if (!API_KEY) {
-      return "ERROR: 'GEMINI_API_KEY' not found in Script Properties. Please add it in Project Settings.";
+      return "ERROR: 'GEMINI_API_KEY' not found in Script Properties.";
   }
 
-  // FIX: Use 'gemini-1.5-flash-latest' for stability
-  const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${API_KEY}`;
+  // FIX: Updated to the available model from your log: 'gemini-2.5-flash'
+  const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
   const prompt = `
     You are a strategic Google Ads consultant. Review the campaign data below and write a persuasive email section for the client.
@@ -274,9 +274,7 @@ function callGeminiAI_(campaignData) {
     if (json.candidates && json.candidates.length > 0) {
       return json.candidates[0].content.parts[0].text;
     } else {
-      // Enhanced error logging
-      const errDetails = json.error ? `${json.error.status}: ${json.error.message}` : JSON.stringify(json);
-      return `AI Error: ${errDetails}`;
+      return `AI Error: ${JSON.stringify(json)}`;
     }
   } catch (e) {
     return `AI Connection Failed: ${e.message}`;
