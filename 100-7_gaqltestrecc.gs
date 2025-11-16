@@ -1,29 +1,61 @@
 /**
- * Test 100-7: Complete Budget Recommendation Scan (All Campaigns).
- * Strategie: Wir scannen ALLE Kampagnen nach ALLEN Budget-Empfehlungstypen.
- * Ziel: Pr?fen, ob die Demand Gen Empfehlung unter einem dieser Typen auftaucht.
+ * Test 100-7: Deep Dive Inspection f?r Demand Gen Recommendations.
+ * ?bernimmt die Logik aus 04-1, fokussiert sich aber rein auf das Logging
+ * der Rohdaten f?r Demand Gen Kampagnen.
  */
-function testAllBudgetRecommendations() {
+function inspectDemandGenRecommendations() {
   
-  const TEST_CID_RAW = '6662487282'; 
+  const TEST_CID_RAW = '6662487282'; // Deine CID
   
-  Logger.log(`\n=== STARTING COMPLETE BUDGET REC SCAN (CID: ${TEST_CID_RAW}) ===`);
+  Logger.log(`\n=== STARTING DEMAND GEN INSPECTION (CID: ${TEST_CID_RAW}) ===`);
 
   try {
     // 1. CID Conversion
     const cidTrimmed = String(TEST_CID_RAW).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
-    if (!extIds || !extIds[cidTrimmed]) throw new Error("CID Lookup Failed");
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     Logger.log(`> API CID: ${apiCid}`);
 
-    // 2. Define Query (Broadest Possible Budget Search)
-    // Wir suchen nach ALLEN 3 Budget-Typen f?r ALLE Kampagnen (kein Demand Gen Filter)
-    const QUERY = `
+    // --- SCHRITT 1: STATUS PR?FEN ---
+    // Wir schauen erst, ob die Kampagne ?berhaupt "Budget Limited" ist.
+    Logger.log('\n[1. CHECKING CAMPAIGN STATUS]');
+    
+    const Q_STATUS = `
+      SELECT 
+        campaign.id, 
+        campaign.name, 
+        campaign.primary_status, 
+        campaign.primary_status_reasons
+      FROM campaign 
+      WHERE 
+        campaign.status = 'ENABLED'
+        AND campaign.advertising_channel_type = 'DEMAND_GEN'
+    `;
+    
+    const resStatus = JSON.parse(InternalAdsApp.search(JSON.stringify({ customerId: apiCid, query: Q_STATUS }), { version: 'v19' })).results || [];
+
+    if (resStatus.length > 0) {
+        resStatus.forEach(row => {
+            const isLimited = row.campaign.primaryStatusReasons ? row.campaign.primaryStatusReasons.includes('BUDGET_CONSTRAINED') : false;
+            Logger.log(`Campaign: "${row.campaign.name}"`);
+            Logger.log(`   ID: ${row.campaign.id}`);
+            Logger.log(`   Status: ${row.campaign.primaryStatus}`);
+            Logger.log(`   Reasons: ${JSON.stringify(row.campaign.primaryStatusReasons)}`);
+            Logger.log(`   -> Is Budget Constrained? ${isLimited ? 'YES' : 'NO'}`);
+        });
+    } else {
+        Logger.log("> No enabled Demand Gen campaigns found.");
+        return;
+    }
+
+    // --- SCHRITT 2: RECOMMENDATIONS PR?FEN (Logik aus 04-1) ---
+    // Wir nutzen exakt die Query aus 04-1, filtern aber auf Demand Gen.
+    Logger.log('\n[2. CHECKING RECOMMENDATION OBJECTS]');
+    
+    const Q_RECS = `
       SELECT
         campaign.id,
         campaign.name,
-        campaign.advertising_channel_type,
         recommendation.type,
         recommendation.campaign_budget_recommendation.budget_options,
         recommendation.forecasting_campaign_budget_recommendation.budget_amount_micros,
@@ -31,66 +63,41 @@ function testAllBudgetRecommendations() {
       FROM
         recommendation
       WHERE
-        recommendation.type IN ('CAMPAIGN_BUDGET', 'FORECASTING_CAMPAIGN_BUDGET', 'MARGINAL_ROI_CAMPAIGN_BUDGET')
+        campaign.advertising_channel_type = 'DEMAND_GEN'
+        AND recommendation.type IN ('CAMPAIGN_BUDGET', 'FORECASTING_CAMPAIGN_BUDGET', 'MARGINAL_ROI_CAMPAIGN_BUDGET')
     `;
 
-    Logger.log(`\n[EXECUTING BROAD QUERY]...`);
-    const request = { customerId: apiCid, query: QUERY };
-    const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
-    const results = JSON.parse(responseJson).results || [];
+    const resRecs = JSON.parse(InternalAdsApp.search(JSON.stringify({ customerId: apiCid, query: Q_RECS }), { version: 'v19' })).results || [];
 
-    Logger.log(`> Total Budget Recommendations Found: ${results.length}`);
-
-    if (results.length > 0) {
-        Logger.log("\n--- FINDINGS ---");
-        
-        results.forEach((row, index) => {
-            const name = row.campaign.name;
-            const type = row.campaign.advertisingChannelType;
-            const recType = row.recommendation.type;
-            let amount = 0;
-            let details = "";
-
-            // 1. Standard
-            if (row.recommendation.campaignBudgetRecommendation?.budgetOptions) {
-                details = "Standard (Options available)";
-                // Find min
-                let min = Infinity;
-                row.recommendation.campaignBudgetRecommendation.budgetOptions.forEach(o => {
-                    const v = parseFloat(o.recommendedBudgetAmountMicros);
-                    if (v < min) min = v;
-                });
-                if (min !== Infinity) amount = min;
+    if (resRecs.length > 0) {
+        resRecs.forEach(row => {
+            Logger.log(`\nRecommendation Found for: "${row.campaign.name}"`);
+            Logger.log(`   Type: ${row.recommendation.type}`);
+            
+            // Check Standard
+            if (row.recommendation.campaignBudgetRecommendation) {
+                Logger.log(`   -> Has 'campaignBudgetRecommendation'`);
+                Logger.log(`   -> Options: ${JSON.stringify(row.recommendation.campaignBudgetRecommendation.budgetOptions)}`);
             }
             
-            // 2. Forecasting
+            // Check Forecasting
             if (row.recommendation.forecastingCampaignBudgetRecommendation) {
-                details = "Forecasting (Specific Amount)";
-                amount = parseFloat(row.recommendation.forecastingCampaignBudgetRecommendation.budgetAmountMicros);
+                const amt = row.recommendation.forecastingCampaignBudgetRecommendation.budgetAmountMicros;
+                Logger.log(`   -> Has 'forecastingCampaignBudgetRecommendation'`);
+                Logger.log(`   -> Amount: ${amt} micros`);
             }
 
-            // 3. Marginal ROI
+            // Check Marginal ROI
             if (row.recommendation.marginalRoiCampaignBudgetRecommendation) {
-                details = "Marginal ROI (Specific Amount)";
-                amount = parseFloat(row.recommendation.marginalRoiCampaignBudgetRecommendation.recommendedBudgetAmountMicros);
+                const amt = row.recommendation.marginalRoiCampaignBudgetRecommendation.recommendedBudgetAmountMicros;
+                Logger.log(`   -> Has 'marginalRoiCampaignBudgetRecommendation'`);
+                Logger.log(`   -> Amount: ${amt} micros`);
             }
-
-            // Logging with special focus on Demand Gen
-            const prefix = type === 'DEMAND_GEN' ? ">>> DEMAND GEN FOUND: " : "";
-            
-            if (amount > 0) {
-                Logger.log(`${prefix}[${type}] "${name}"`);
-                Logger.log(`   Type: ${recType}`);
-                Logger.log(`   Rec: ${(amount/1000000).toFixed(2)} (${details})`);
-            } else {
-                Logger.log(`${prefix}[${type}] "${name}" (Type: ${recType} - No amount parsed)`);
-            }
-            Logger.log('--------------------------------');
         });
     } else {
-        Logger.log("> No budget recommendations found for ANY campaign.");
-        Logger.log("  (Dies bedeutet, dass die API aktuell keine Recommendation-Objekte f?r Budget ausliefert,");
-        Logger.log("   auch nicht f?r die Kampagnen, die im Status als 'Limited' markiert sind).");
+        Logger.log("> 0 Recommendations found for Demand Gen via API.");
+        Logger.log("  (Das best?tigt, dass Google f?r diese Kampagne KEIN Recommendation-Objekt bereitstellt,");
+        Logger.log("   obwohl der Status evtl. 'Limited' ist. Der 'Check UI' Fallback in 04-1 ist also korrekt).");
     }
 
   } catch (e) {
@@ -98,5 +105,5 @@ function testAllBudgetRecommendations() {
     Logger.log(e.stack);
   }
   
-  Logger.log("\n=== TEST COMPLETED ===");
+  Logger.log("\n=== INSPECTION COMPLETED ===");
 }
