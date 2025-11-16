@@ -238,11 +238,15 @@ function callGeminiAI_(campaignData) {
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
     4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
 
-    SPRACHREGELUNG (WICHTIG):
-    - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
-    - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
-    - "Target Met" -> "Ziel erreicht"
-    - "RecommendedBudget" -> "empfohlene Tagesbudget"
+SPRACHREGELUNG (STRIKT):
+    1. **VERBOTENE WORTE (Niemals nutzen):** "Depletion", "Limited", "Budget Limited", "Missed", "Target Met", "Recommendation", "Efficiency Scale".
+    2. **PFLICHT-?BERSETZUNGEN:**
+       - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
+       - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
+       - "Target Met" -> "Ziel erreicht"
+       - "RecommendedBudget" -> "empfohlene Tagesbudget"
+       - "Depletion" -> "Budget-Aussch?pfung" oder "Auslastung"
+    3. **AUSNAHME:** Das Wort "Conversion" oder "Conversions" darf (und soll) verwendet werden.
 
     REGELN F?R DEN INHALT:
     1. **Abwechslung:** Variiere den Satzbau. Vermeide es, jeden Punkt identisch zu beginnen ("Die Kampagne...").
