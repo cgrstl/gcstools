@@ -1,12 +1,12 @@
 /**
- * Final Corrected Test for Search IS Metrics.
- * FIX: Uses CORRECT field names (search_budget_lost_impression_share).
- * FIX: Uses AGGREGATION (no date segment).
+ * Final Corrected Test for Search & PMax IS Metrics.
+ * - Now includes PERFORMANCE_MAX to verify metric compatibility.
+ * - Uses AGGREGATION (no date segment) to maximize data availability.
  */
-function testSearchISMetricsOnly() {
+function testSearchAndPMaxISMetrics() {
   
-  const TEST_CID_RAW = '6652886860'; 
-  Logger.log(`\n=== STARTING SEARCH IS TEST (CID: ${TEST_CID_RAW}) ===`);
+  const TEST_CID_RAW = '6662487282'; 
+  Logger.log(`\n=== STARTING SEARCH & PMAX IS TEST (CID: ${TEST_CID_RAW}) ===`);
 
   // 1. Date Helper
   const getSafeDateRange = () => {
@@ -32,11 +32,12 @@ function testSearchISMetricsOnly() {
     const dates = getSafeDateRange();
     Logger.log(`> Date Range: ${dates.start} to ${dates.end}`);
 
-    // 3. Define Query (CORRECTED FIELD NAMES)
+    // 3. Define Query (Updated for SEARCH + PMAX)
     const QUERY = `
       SELECT
         campaign.id,
         campaign.name,
+        campaign.advertising_channel_type,
         metrics.search_impression_share,
         metrics.search_budget_lost_impression_share,
         metrics.search_rank_lost_impression_share
@@ -44,7 +45,7 @@ function testSearchISMetricsOnly() {
         campaign
       WHERE
         campaign.status = 'ENABLED' 
-        AND campaign.advertising_channel_type = 'SEARCH'
+        AND campaign.advertising_channel_type IN ('SEARCH', 'PERFORMANCE_MAX')
         AND segments.date BETWEEN '${dates.start}' AND '${dates.end}'
     `;
 
@@ -59,13 +60,14 @@ function testSearchISMetricsOnly() {
     
     if (results.length > 0) {
         Logger.log("--- SUCCESS: DATA FOUND ---");
-        const count = Math.min(results.length, 3);
+        // Log sample rows to see if PMax appears
+        const count = Math.min(results.length, 5);
         for (let i = 0; i < count; i++) {
             const row = results[i];
-            Logger.log(`Row ${i+1}: "${row.campaign.name}"`);
+            Logger.log(`Row ${i+1}: [${row.campaign.advertisingChannelType}] "${row.campaign.name}"`);
             Logger.log(`   - Search IS: ${row.metrics.searchImpressionShare}`);
-            Logger.log(`   - Lost Budget: ${row.metrics.searchBudgetLostImpressionShare}`); // Corrected property name
-            Logger.log(`   - Lost Rank: ${row.metrics.searchRankLostImpressionShare}`);     // Corrected property name
+            Logger.log(`   - Lost Budget: ${row.metrics.searchBudgetLostImpressionShare}`);
+            Logger.log(`   - Lost Rank: ${row.metrics.searchRankLostImpressionShare}`);
         }
     } else {
         Logger.log("> WARNING: 0 rows returned.");
