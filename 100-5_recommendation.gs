@@ -1,12 +1,14 @@
 /**
- * Test 100-5: Budget Simulation Exploration.
- * Purpose: To find recommended budget amounts when the standard 'recommendation' resource is empty.
- * Source: 'campaign_simulation' (The backing data for budget forecasts).
+ * Test 100-5: Budget Recommendations (OptiScore Analysis).
+ * - Checks for 'CAMPAIGN_BUDGET' and 'FORECASTING_CAMPAIGN_BUDGET'.
+ * - Extracts the MINIMUM recommended amount from the options (Low/Mid/High).
+ * - Output format: "YES ( <Amount> )"
  */
-function testBudgetSimulations() {
+function testBudgetRecommendations_100_5() {
   
-  const TEST_CID_RAW = '6662487282'; 
-  Logger.log(`\n=== STARTING BUDGET SIMULATION TEST (CID: ${TEST_CID_RAW}) ===`);
+  const TEST_CID_RAW = '6652886860'; // Your Internal CID
+  
+  Logger.log(`\n=== STARTING OPTISCORE BUDGET TEST (CID: ${TEST_CID_RAW}) ===`);
 
   try {
     // 1. CID Conversion
@@ -16,64 +18,88 @@ function testBudgetSimulations() {
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     Logger.log(`> API CID: ${apiCid}`);
 
-    // 2. Find Limited Campaigns (To get IDs)
-    const Q_LIMITED = `
-      SELECT campaign.id, campaign.name 
-      FROM campaign 
-      WHERE campaign.status = 'ENABLED' AND campaign.primary_status_reasons CONTAINS ANY ('BUDGET_CONSTRAINED')
-    `;
-    const resLimited = JSON.parse(InternalAdsApp.search(JSON.stringify({ customerId: apiCid, query: Q_LIMITED }), { version: 'v19' })).results || [];
-    
-    if (resLimited.length === 0) {
-        Logger.log("> No campaigns found with 'BUDGET_CONSTRAINED' status via API.");
-        return;
-    }
-
-    const limitedIds = resLimited.map(r => r.campaign.id);
-    Logger.log(`> Found ${limitedIds.length} Limited Campaigns: ${limitedIds.join(', ')}`);
-
-    // 3. Query Simulations for these Campaigns
-    // We look for Type = BUDGET to get budget-specific points
-    const Q_SIM = `
-      SELECT 
-        campaign_simulation.campaign_id,
-        campaign_simulation.type,
-        campaign_simulation.budget_point_list.points
-      FROM campaign_simulation
-      WHERE 
-        campaign_simulation.type = 'BUDGET'
-        AND campaign_simulation.campaign_id IN (${limitedIds.join(',')})
+    // 2. Define Query
+    // We explicitly ask for both standard and forecasting recommendation details
+    const QUERY = `
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.advertising_channel_type,
+        recommendation.type,
+        recommendation.campaign_budget_recommendation.budget_options,
+        recommendation.forecasting_campaign_budget_recommendation.budget_amount_micros
+      FROM
+        recommendation
+      WHERE
+        recommendation.type IN ('CAMPAIGN_BUDGET', 'FORECASTING_CAMPAIGN_BUDGET')
+        AND recommendation.status = 'ACTIVE'
     `;
 
-    Logger.log('\n[FETCHING SIMULATIONS]...');
-    const resSim = JSON.parse(InternalAdsApp.search(JSON.stringify({ customerId: apiCid, query: Q_SIM }), { version: 'v19' })).results || [];
+    Logger.log(`\n[FETCHING RECOMMENDATIONS]...`);
     
-    if (resSim.length > 0) {
-        resSim.forEach(row => {
-            const campId = row.campaignSimulation.campaignId;
-            const points = row.campaignSimulation.budgetPointList.points;
+    // 3. Execute
+    const request = { customerId: apiCid, query: QUERY };
+    const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
+    const results = JSON.parse(responseJson).results || [];
+
+    Logger.log(`> Rows Returned: ${results.length}`);
+
+    if (results.length > 0) {
+        Logger.log("\n--- BUDGET RECOMMENDATIONS FOUND ---");
+        
+        results.forEach((row, index) => {
+            const name = row.campaign.name;
+            const type = row.campaign.advertisingChannelType;
+            const recType = row.recommendation.type;
             
-            Logger.log(`\nCampaign ID: ${campId}`);
-            if (points && points.length > 0) {
-                Logger.log(`> Found ${points.length} Simulation Points.`);
-                // Log the first 3 points as examples (usually current, low, high)
-                points.slice(0, 3).forEach((pt, i) => {
-                    const budget = parseFloat(pt.budgetAmountMicros) / 1000000;
-                    const clicks = pt.clicks;
-                    const cost = parseFloat(pt.costMicros) / 1000000;
-                    Logger.log(`   Point ${i+1}: Budget ${budget.toFixed(2)} -> Est. Cost ${cost.toFixed(2)} | Clicks ${clicks}`);
+            let minBudgetMicros = Infinity;
+            let source = "";
+
+            // A. Check Standard Budget Options (Low, Mid, High)
+            if (row.recommendation.campaignBudgetRecommendation && 
+                row.recommendation.campaignBudgetRecommendation.budgetOptions) {
+                
+                const options = row.recommendation.campaignBudgetRecommendation.budgetOptions;
+                source = `Standard (${options.length} options)`;
+                
+                // Iterate to find minimum
+                options.forEach(opt => {
+                    const amt = parseFloat(opt.recommendedBudgetAmountMicros);
+                    if (amt < minBudgetMicros) minBudgetMicros = amt;
                 });
-            } else {
-                Logger.log("> No data points in simulation.");
             }
+            
+            // B. Check Forecasting Recommendation (Single Value)
+            if (row.recommendation.forecastingCampaignBudgetRecommendation) {
+                const amt = parseFloat(row.recommendation.forecastingCampaignBudgetRecommendation.budgetAmountMicros);
+                if (amt < minBudgetMicros) {
+                    minBudgetMicros = amt;
+                    source = "Forecasting (Single value)";
+                }
+            }
+
+            // C. Format Output
+            if (minBudgetMicros !== Infinity) {
+                // Assuming USD/EUR standard formatting (divide by 1m)
+                const amount = (minBudgetMicros / 1000000).toFixed(2);
+                Logger.log(`${index+1}. [${type}] "${name}"`);
+                Logger.log(`   -> Rec Type: ${recType} | Source: ${source}`);
+                Logger.log(`   -> Result: YES ( ${amount} )`);
+            } else {
+                Logger.log(`${index+1}. [${type}] "${name}" -> Rec found but no amount parsed.`);
+            }
+            Logger.log('------------------------------------------------');
         });
+
     } else {
-        Logger.log("> No simulations returned. (Google may not have generated forecast data for these campaigns yet).");
+        Logger.log("> WARNING: 0 Budget Recommendations returned.");
+        Logger.log("  (Verify that the 'OptiScore' recommendations are not 'Dismissed' or 'Applied' in the UI).");
     }
 
   } catch (e) {
     Logger.log(`\nFATAL ERROR: ${e.message}`);
     Logger.log(e.stack);
   }
+  
   Logger.log("\n=== TEST COMPLETED ===");
 }
