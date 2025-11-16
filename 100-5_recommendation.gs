@@ -1,43 +1,40 @@
 /**
- * Test 100-5: Budget Recommendations (OptiScore Analysis).
- * - Checks for 'CAMPAIGN_BUDGET' and 'FORECASTING_CAMPAIGN_BUDGET'.
- * - Extracts the MINIMUM recommended amount from the options (Low/Mid/High).
- * - Output format: "YES ( <Amount> )"
+ * Test 100-5: Expanded Budget Recommendation Hunter.
+ * Checks all 3 budget-related recommendation types to find the "missing" data.
+ * - CAMPAIGN_BUDGET
+ * - FORECASTING_CAMPAIGN_BUDGET
+ * - MARGINAL_ROI_CAMPAIGN_BUDGET
  */
-function testBudgetRecommendations_100_5() {
+function testBudgetRecommendations_Expanded() {
   
-  const TEST_CID_RAW = '6652886860'; // Your Internal CID
-  
-  Logger.log(`\n=== STARTING OPTISCORE BUDGET TEST (CID: ${TEST_CID_RAW}) ===`);
+  const TEST_CID_RAW = '6662487282'; 
+  Logger.log(`\n=== STARTING EXPANDED BUDGET REC TEST (CID: ${TEST_CID_RAW}) ===`);
 
   try {
     // 1. CID Conversion
     const cidTrimmed = String(TEST_CID_RAW).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
-    if (!extIds || !extIds[cidTrimmed]) throw new Error("CID Lookup Failed");
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     Logger.log(`> API CID: ${apiCid}`);
 
-    // 2. Define Query
-    // We explicitly ask for both standard and forecasting recommendation details
+    // 2. Define Expanded Query
+    // We request specific fields for all 3 budget types
     const QUERY = `
       SELECT
         campaign.id,
         campaign.name,
-        campaign.advertising_channel_type,
         recommendation.type,
         recommendation.campaign_budget_recommendation.budget_options,
-        recommendation.forecasting_campaign_budget_recommendation.budget_amount_micros
+        recommendation.forecasting_campaign_budget_recommendation.budget_amount_micros,
+        recommendation.marginal_roi_campaign_budget_recommendation.recommended_budget_amount_micros
       FROM
         recommendation
       WHERE
-        recommendation.type IN ('CAMPAIGN_BUDGET', 'FORECASTING_CAMPAIGN_BUDGET')
-        AND recommendation.status = 'ACTIVE'
+        recommendation.type IN ('CAMPAIGN_BUDGET', 'FORECASTING_CAMPAIGN_BUDGET', 'MARGINAL_ROI_CAMPAIGN_BUDGET')
     `;
 
-    Logger.log(`\n[FETCHING RECOMMENDATIONS]...`);
+    Logger.log(`\n[FETCHING EXPANDED RECOMMENDATIONS]...`);
     
-    // 3. Execute
     const request = { customerId: apiCid, query: QUERY };
     const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
     const results = JSON.parse(responseJson).results || [];
@@ -45,55 +42,53 @@ function testBudgetRecommendations_100_5() {
     Logger.log(`> Rows Returned: ${results.length}`);
 
     if (results.length > 0) {
-        Logger.log("\n--- BUDGET RECOMMENDATIONS FOUND ---");
-        
-        results.forEach((row, index) => {
-            const name = row.campaign.name;
-            const type = row.campaign.advertisingChannelType;
-            const recType = row.recommendation.type;
-            
-            let minBudgetMicros = Infinity;
-            let source = "";
+      Logger.log("\n--- DATA FOUND ---");
+      
+      results.forEach((row, index) => {
+         const campName = row.campaign.name;
+         const type = row.recommendation.type;
+         let amount = 0;
+         let source = "";
 
-            // A. Check Standard Budget Options (Low, Mid, High)
-            if (row.recommendation.campaignBudgetRecommendation && 
-                row.recommendation.campaignBudgetRecommendation.budgetOptions) {
-                
-                const options = row.recommendation.campaignBudgetRecommendation.budgetOptions;
-                source = `Standard (${options.length} options)`;
-                
-                // Iterate to find minimum
-                options.forEach(opt => {
-                    const amt = parseFloat(opt.recommendedBudgetAmountMicros);
-                    if (amt < minBudgetMicros) minBudgetMicros = amt;
-                });
-            }
-            
-            // B. Check Forecasting Recommendation (Single Value)
-            if (row.recommendation.forecastingCampaignBudgetRecommendation) {
-                const amt = parseFloat(row.recommendation.forecastingCampaignBudgetRecommendation.budgetAmountMicros);
-                if (amt < minBudgetMicros) {
-                    minBudgetMicros = amt;
-                    source = "Forecasting (Single value)";
-                }
-            }
+         // 1. Standard (Options)
+         if (row.recommendation.campaignBudgetRecommendation?.budgetOptions) {
+             const opts = row.recommendation.campaignBudgetRecommendation.budgetOptions;
+             // Find minimum
+             let min = Infinity;
+             opts.forEach(o => { if (parseFloat(o.recommendedBudgetAmountMicros) < min) min = parseFloat(o.recommendedBudgetAmountMicros); });
+             if (min !== Infinity) {
+                 amount = min;
+                 source = "Standard (Min Option)";
+             }
+         }
+         
+         // 2. Forecasting (Single Value)
+         if (row.recommendation.forecastingCampaignBudgetRecommendation) {
+             amount = parseFloat(row.recommendation.forecastingCampaignBudgetRecommendation.budgetAmountMicros);
+             source = "Forecasting (Target)";
+         }
 
-            // C. Format Output
-            if (minBudgetMicros !== Infinity) {
-                // Assuming USD/EUR standard formatting (divide by 1m)
-                const amount = (minBudgetMicros / 1000000).toFixed(2);
-                Logger.log(`${index+1}. [${type}] "${name}"`);
-                Logger.log(`   -> Rec Type: ${recType} | Source: ${source}`);
-                Logger.log(`   -> Result: YES ( ${amount} )`);
-            } else {
-                Logger.log(`${index+1}. [${type}] "${name}" -> Rec found but no amount parsed.`);
-            }
-            Logger.log('------------------------------------------------');
-        });
+         // 3. Marginal ROI (Single Value)
+         if (row.recommendation.marginalRoiCampaignBudgetRecommendation) {
+             amount = parseFloat(row.recommendation.marginalRoiCampaignBudgetRecommendation.recommendedBudgetAmountMicros);
+             source = "Marginal ROI";
+         }
 
+         // Report
+         if (amount > 0) {
+             const formatted = (amount / 1000000).toFixed(2);
+             Logger.log(`${index+1}. [${type}] "${campName}"`);
+             Logger.log(`   -> Recommendation: YES ( ${formatted} )`);
+             Logger.log(`   -> Source: ${source}`);
+         } else {
+             Logger.log(`${index+1}. [${type}] "${campName}" -> Found object but no valid amount.`);
+         }
+      });
+      
     } else {
-        Logger.log("> WARNING: 0 Budget Recommendations returned.");
-        Logger.log("  (Verify that the 'OptiScore' recommendations are not 'Dismissed' or 'Applied' in the UI).");
+      Logger.log("> 0 Recommendations found."); 
+      Logger.log("  (If Campaign Status is 'Limited' but this returns 0, the API has not generated a recommendation object yet).");
+      Logger.log("  (Fallback logic 'Check UI' is required).");
     }
 
   } catch (e) {
