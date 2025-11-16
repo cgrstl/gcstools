@@ -1,8 +1,8 @@
 /**
- * Test 100-4: Budget Depletion & Smart Bidding Performance.
- * - Scope: All Active Campaigns (Search, Display, Video, Shopping, PMax, Demand Gen).
- * - Metric 1: Budget Depletion (7-Day Avg Spend / Daily Budget).
- * - Metric 2: Target Met/Not Met (Only for Target CPA/ROAS strategies).
+ * Test 100-4: Budget Depletion & Smart Bidding Performance (FIXED).
+ * - Scope: All Active Campaigns.
+ * - Metric 1: Budget Depletion.
+ * - Metric 2: Target Met/Not Met (Robust check for Maximize strategies with Targets).
  */
 function testBudgetAndBiddingLogic() {
 
@@ -11,7 +11,6 @@ function testBudgetAndBiddingLogic() {
   Logger.log(`\n=== STARTING BUDGET & BIDDING TEST (CID: ${TEST_CID_RAW}) ===`);
 
   // --- 1. CONSTANTS ---
-  // We use the exact 7-day window established previously
   const REPORT_DAYS_COUNT = 7;
   const CAMPAIGN_TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
 
@@ -42,8 +41,7 @@ function testBudgetAndBiddingLogic() {
     Logger.log(`> Date Range: ${dates.start} to ${dates.end} (${REPORT_DAYS_COUNT} Days)`);
 
     // C. Define Query
-    // We pull aggregated metrics (no segments.date in SELECT) to get 7-day totals.
-    // We include campaign_budget and target fields.
+    // CRITICAL FIX: Added maximize_conversion_value.target_roas and maximize_conversions.target_cpa_micros
     const QUERY = `
       SELECT
         campaign.id,
@@ -53,6 +51,8 @@ function testBudgetAndBiddingLogic() {
         campaign_budget.amount_micros,
         campaign.target_cpa.target_cpa_micros,
         campaign.target_roas.target_roas,
+        campaign.maximize_conversion_value.target_roas,
+        campaign.maximize_conversions.target_cpa_micros,
         metrics.cost_micros,
         metrics.conversions,
         metrics.conversions_value
@@ -80,47 +80,61 @@ function testBudgetAndBiddingLogic() {
             const type = row.campaign.advertisingChannelType;
             const bidStrategy = row.campaign.biddingStrategyType;
             
-            // 1. Parse Financials (Micros -> Standard)
+            // 1. Parse Financials
             const cost7Days = parseFloat(row.metrics.costMicros || 0) / 1000000;
             const conversions = parseFloat(row.metrics.conversions || 0);
             const convValue = parseFloat(row.metrics.conversionsValue || 0);
             const dailyBudget = parseFloat(row.campaignBudget.amountMicros || 0) / 1000000;
 
             // 2. Calculate Budget Depletion
-            // Formula: (7-Day Cost / 7) / Daily Budget
             let depletionPct = 0;
             if (dailyBudget > 0) {
                 const avgDailySpend = cost7Days / REPORT_DAYS_COUNT;
                 depletionPct = (avgDailySpend / dailyBudget) * 100;
             }
             
-            // 3. Analyze Bidding Target
+            // 3. Analyze Bidding Target (Logic Fixed for Maximize Strategies)
             let targetReport = "-";
             let targetDebug = "";
+            
+            // --- ROAS LOGIC ---
+            // Check both explicit Target ROAS and Max Conv Value with Target ROAS
+            let targetRoas = 0;
+            if (bidStrategy === 'TARGET_ROAS') {
+                targetRoas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
+            } else if (bidStrategy === 'MAXIMIZE_CONVERSION_VALUE') {
+                targetRoas = parseFloat(row.campaign.maximizeConversionValue?.targetRoas || 0);
+            }
 
-            if (bidStrategy === 'TARGET_CPA') {
-                const targetCpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0) / 1000000;
-                
-                if (targetCpa > 0 && conversions > 0) {
-                    const actualCpa = cost7Days / conversions;
-                    const met = actualCpa <= targetCpa;
-                    targetReport = met ? "YES (Target Met)" : "NO (Missed)";
-                    targetDebug = `(Act. CPA: ${actualCpa.toFixed(2)} vs Tgt: ${targetCpa.toFixed(2)})`;
-                } else if (conversions === 0) {
-                     targetReport = "NO (0 Conv)";
-                }
-                
-            } else if (bidStrategy === 'TARGET_ROAS') {
-                const targetRoas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
-                
-                if (targetRoas > 0 && cost7Days > 0) {
+            if (targetRoas > 0) {
+                if (cost7Days > 0) {
                     const actualRoas = convValue / cost7Days;
                     const met = actualRoas >= targetRoas;
                     targetReport = met ? "YES (Target Met)" : "NO (Missed)";
                     targetDebug = `(Act. ROAS: ${actualRoas.toFixed(2)} vs Tgt: ${targetRoas.toFixed(2)})`;
-                } else if (cost7Days === 0) {
+                } else {
                     targetReport = "- (0 Spend)";
                 }
+            }
+
+            // --- CPA LOGIC ---
+            // Check both explicit Target CPA and Max Conversions with Target CPA
+            let targetCpa = 0;
+            if (bidStrategy === 'TARGET_CPA') {
+                 targetCpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0) / 1000000;
+            } else if (bidStrategy === 'MAXIMIZE_CONVERSIONS') {
+                 targetCpa = parseFloat(row.campaign.maximizeConversions?.targetCpaMicros || 0) / 1000000;
+            }
+
+            if (targetCpa > 0) {
+                 if (conversions > 0) {
+                    const actualCpa = cost7Days / conversions;
+                    const met = actualCpa <= targetCpa;
+                    targetReport = met ? "YES (Target Met)" : "NO (Missed)";
+                    targetDebug = `(Act. CPA: ${actualCpa.toFixed(2)} vs Tgt: ${targetCpa.toFixed(2)})`;
+                 } else {
+                    targetReport = "NO (0 Conv)";
+                 }
             }
 
             // 4. Log Output
@@ -128,7 +142,12 @@ function testBudgetAndBiddingLogic() {
             Logger.log(`   - Budget: ${dailyBudget.toFixed(2)}/day | 7-Day Spend: ${cost7Days.toFixed(2)}`);
             Logger.log(`   - Depletion: ${depletionPct.toFixed(2)}%`);
             Logger.log(`   - Strategy: ${bidStrategy}`);
-            Logger.log(`   - Target Status: ${targetReport} ${targetDebug}`);
+            // Only show target status if a target was actually found (ROAS or CPA)
+            if (targetRoas > 0 || targetCpa > 0) {
+                Logger.log(`   - Target Status: ${targetReport} ${targetDebug}`);
+            } else {
+                Logger.log(`   - Target Status: - (No Target Set)`);
+            }
             Logger.log('------------------------------------------------');
         });
 
