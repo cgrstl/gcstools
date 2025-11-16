@@ -125,12 +125,26 @@ function processEmailRequest(formData) {
           ...userAttachments             // Neue Anh?nge aus der Sidebar
         ];
 
-        // PDF-Anhang-Logik (derzeit ignoriert, wie angewiesen)
+       // --- 2.5 PDF-ANHANG-LOGIK (JETZT AKTIVIERT) ---
         if (formData.enablePdfAttachment) {
-           Logger.log(`Row ${sheetRowNumber}: 'enablePdfAttachment' is true, but this feature is currently ignored as requested.`);
-           // HIER W?RDE DER AUFRUF F?R 04-3 HINKOMMEN
-           // const pdfBlob = createBudgetReportPdf_(analysisResult.allCampaignsData, ...);
-           // if (pdfBlob) finalAttachments.push(pdfBlob);
+           Logger.log(`Row ${sheetRowNumber}: 'enablePdfAttachment' is true. Generating PDF...`);
+           
+           // Ruft die NEUE, separate Funktion in 04-3_PdfGenerator.gs auf
+           // Wir ?bergeben die *komplette* Datenliste, nicht nur die KI-gefilterte
+           const pdfBlob = createBudgetReportPdf_(
+             analysisResult.allCampaignsData, 
+             analysisResult.currency, 
+             analysisResult.externalCid, // Externe CID f?r den Titel
+             formData.dateRange
+           );
+           
+           if (pdfBlob) {
+             finalAttachments.push(pdfBlob);
+             Logger.log(`Row ${sheetRowNumber}: PDF Blob successfully attached.`);
+           } else {
+             Logger.log(`Row ${sheetRowNumber}: PDF Blob generation FAILED.`);
+             // Wir machen trotzdem weiter, nur ohne PDF
+           }
         }
 
         // --- 2.5 Entwurf erstellen ---
