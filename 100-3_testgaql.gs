@@ -1,93 +1,102 @@
 /**
- * Public test function to verify the GAQL cascade for a specific CID.
- * FIX: Splits Performance query into "Universal" and "Competitive" to avoid zero-row errors.
+ * Final Debug Function to verify GAQL data retrieval.
+ * FIX: Splits Competitive queries by Campaign Type to avoid metric incompatibility.
+ * FIX: Broadens Recommendation query to find the missing Demand Gen recommendation.
  */
 function testGAQLPerformanceQuery() {
 
-  // --- 1. LOCAL CONSTANTS ---
+  // --- CONSTANTS ---
   const DATE_PLACEHOLDER_START = 'YYYY-MM-DD_START';
   const DATE_PLACEHOLDER_END = 'YYYY-MM-DD_END';
-  
-  // ALL Types (For Cost, Conversions, Clicks)
-  const CAMPAIGN_TYPES_UNIVERSAL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN'";
-  
-  // IS Types (Search, Display, PMax - specific metrics only)
-  // Note: 'search_impression_share_lost_budget' is widely supported for Search/Display. 
-  // PMax supports 'search_impression_share' but often not the 'lost' breakdown in the same way.
-  const CAMPAIGN_TYPES_COMPETITIVE = "'SEARCH', 'DISPLAY', 'PERFORMANCE_MAX'";
-
   const QUERY_0_CURRENCY = `SELECT customer.currency_code FROM customer`;
 
-  // QUERY 1A: UNIVERSAL FINANCIALS (Safe for ALL types)
-  // Removing IS metrics ensures this returns rows for Video/Demand Gen
-  const QUERY_1A_FINANCIALS = `
+  // Q1: UNIVERSAL FINANCIALS (All Types) - working
+  const QUERY_1_FINANCIALS = `
     SELECT
       campaign.id,
       campaign.name,
       campaign.advertising_channel_type,
       metrics.cost_micros,
       metrics.conversions,
-      metrics.conversions_value,
       metrics.clicks,
       segments.date
     FROM
       campaign
     WHERE
       campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type IN (${CAMPAIGN_TYPES_UNIVERSAL})
+      AND campaign.advertising_channel_type IN ('SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN')
       AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
   `;
 
-  // QUERY 1B: COMPETITIVE METRICS (Safe for Search/Display/PMax)
-  const QUERY_1B_COMPETITIVE = `
+  // Q3A: SEARCH IS (Search Only) - Supports Lost Budget/Rank
+  const QUERY_3A_SEARCH_IS = `
     SELECT
       campaign.id,
+      campaign.name,
       metrics.search_impression_share,
       metrics.search_impression_share_lost_budget,
-      metrics.search_impression_share_lost_rank,
-      segments.date
+      metrics.search_impression_share_lost_rank
     FROM
       campaign
     WHERE
       campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type IN (${CAMPAIGN_TYPES_COMPETITIVE})
+      AND campaign.advertising_channel_type = 'SEARCH'
       AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
   `;
 
-  const QUERY_2_TARGETS = `
+  // Q3B: DISPLAY IS (Display Only) - Supports Content IS
+  const QUERY_3B_DISPLAY_IS = `
     SELECT
       campaign.id,
-      campaign.target_cpa.target_cpa_micros,
-      campaign.target_roas.target_roas
+      campaign.name,
+      metrics.content_impression_share,
+      metrics.content_budget_lost_impression_share,
+      metrics.content_rank_lost_impression_share
     FROM
       campaign
     WHERE
       campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type IN (${CAMPAIGN_TYPES_UNIVERSAL})
-      AND campaign.bidding_strategy_type IN ('TARGET_CPA', 'TARGET_ROAS', 'MAXIMIZE_CONVERSION_VALUE', 'MAXIMIZE_CONVERSIONS')
+      AND campaign.advertising_channel_type = 'DISPLAY'
+      AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
   `;
 
-  const QUERY_4_RECOMMENDATIONS = `
+  // Q3C: PMAX IS (PMax Only) - Supports ONLY Search IS (No Lost Budget/Rank)
+  const QUERY_3C_PMAX_IS = `
     SELECT
+      campaign.id,
+      campaign.name,
+      metrics.search_impression_share
+    FROM
+      campaign
+    WHERE
+      campaign.status = 'ENABLED' 
+      AND campaign.advertising_channel_type = 'PERFORMANCE_MAX'
+      AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
+  `;
+
+  // Q4: RECOMMENDATIONS (Broadened for Debugging)
+  // Removed 'WHERE type=CAMPAIGN_BUDGET' to see ALL recs and find the Demand Gen one
+  const QUERY_4_DEBUG_RECS = `
+    SELECT
+      recommendation.resource_name,
+      recommendation.type,
       recommendation.campaign,
+      recommendation.impact,
       recommendation.campaign_budget_recommendation.budget_options
     FROM
       recommendation
-    WHERE
-      recommendation.type = 'CAMPAIGN_BUDGET'
+    LIMIT 50
   `;
 
-  // --- 2. LOCAL HELPERS (Fixed Timezone & Execution) ---
+  // --- HELPERS ---
   
   const getLocal7DayRange = () => {
-    let timeZone = "Europe/Dublin";
+    let timeZone = "Europe/Dublin"; 
     try {
-        const ss = SpreadsheetApp.getActiveSpreadsheet();
-        if (ss) timeZone = ss.getSpreadsheetTimeZone();
-        else timeZone = Session.getScriptTimeZone() || "Europe/Dublin";
-    } catch (e) {
-        Logger.log("Using default timezone: " + timeZone);
-    }
+       const ss = SpreadsheetApp.getActiveSpreadsheet();
+       if (ss) timeZone = ss.getSpreadsheetTimeZone();
+       else timeZone = Session.getScriptTimeZone() || "Europe/Dublin";
+    } catch (e) { }
 
     const endDate = new Date();
     endDate.setDate(endDate.getDate() - 1); 
@@ -100,85 +109,73 @@ function testGAQLPerformanceQuery() {
     };
   };
 
-  const executeLocalQuery = (clientId, query, dateRange) => {
-    let finalQuery = query;
+  const executeLocalQuery = (label, clientId, queryTemplate, dateRange) => {
+    Logger.log(`\n--- EXEC ${label} ---`);
+    let finalQuery = queryTemplate;
     if (dateRange) {
       finalQuery = finalQuery.replace(DATE_PLACEHOLDER_START, dateRange.startDateStr);
       finalQuery = finalQuery.replace(DATE_PLACEHOLDER_END, dateRange.endDateStr);
     }
-    const request = { customerId: clientId, query: finalQuery };
-    // Uses the GLOBAL InternalAdsApp object
-    const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
-    return JSON.parse(responseJson);
+    
+    try {
+        const request = { customerId: clientId, query: finalQuery };
+        const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
+        const response = JSON.parse(responseJson);
+        const results = response.results || [];
+        Logger.log(`Result: ${results.length} rows.`);
+        return results;
+    } catch (e) {
+        Logger.log(`ERROR in ${label}: ${e.message}`);
+        return [];
+    }
   };
 
-  // --- 3. TEST EXECUTION LOGIC ---
-  
+  // --- MAIN TEST ---
+
   const TEST_CID_RAW = '6652886860'; 
-  Logger.log(`\n=== STARTING GAQL TEST FOR CID: ${TEST_CID_RAW} ===`);
+
+  Logger.log(`\n=== DEBUG RUN START: CID ${TEST_CID_RAW} ===`);
 
   try {
-    // Step A: CID Conversion
-    let apiCid;
-    const currentCidTrimmed = String(TEST_CID_RAW).trim();
-    const externalIds = InternalAdsApp.getExternalCustomerIds([currentCidTrimmed]); 
-    
-    if (externalIds && externalIds[currentCidTrimmed]) {
-        apiCid = externalIds[currentCidTrimmed].replace(/-/g, '');
-    } else {
-        throw new Error(`CID Lookup Error: Invalid CID or No Access for ${TEST_CID_RAW}.`);
-    }
+    const cidTrimmed = String(TEST_CID_RAW).trim();
+    const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
+    if (!extIds || !extIds[cidTrimmed]) throw new Error("CID Lookup Failed");
+    const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     
     const dateRange = getLocal7DayRange();
-    Logger.log(`> Date Range: ${dateRange.startDateStr} to ${dateRange.endDateStr}`);
-    
-    // --- RUN QUERIES ---
-    
-    // Q0: Currency
-    let q0 = executeLocalQuery(apiCid, QUERY_0_CURRENCY, null);
-    Logger.log(`\n[Q0 Currency] Code: ${q0.results?.[0]?.customer?.currencyCode || 'Unknown'}`);
+    Logger.log(`Date Range: ${dateRange.startDateStr} -> ${dateRange.endDateStr}`);
 
-    // Q1A: Financials (This SHOULD return rows now)
-    Logger.log('\n[Q1A Financials] Fetching Universal Data...');
-    let q1a = executeLocalQuery(apiCid, QUERY_1A_FINANCIALS, dateRange);
-    const q1aCount = q1a.results?.length || 0;
-    Logger.log(`> Rows Returned: ${q1aCount}`);
-    if (q1aCount > 0) {
-       const row = q1a.results[0];
-       Logger.log(`> Sample: ${row.campaign.name} (${row.campaign.advertisingChannelType}) | Cost: ${row.metrics.costMicros} | Conv: ${row.metrics.conversions}`);
+    // 1. FINANCIALS
+    executeLocalQuery("Q1_FINANCIALS", apiCid, QUERY_1_FINANCIALS, dateRange);
+
+    // 2. COMPETITIVE (Split by Type)
+    const q3a = executeLocalQuery("Q3A_SEARCH_IS", apiCid, QUERY_3A_SEARCH_IS, dateRange);
+    if (q3a.length > 0) Logger.log(`> Sample Search IS: ${q3a[0].metrics.searchImpressionShare} | Lost Budget: ${q3a[0].metrics.searchImpressionShareLostBudget}`);
+
+    const q3b = executeLocalQuery("Q3B_DISPLAY_IS", apiCid, QUERY_3B_DISPLAY_IS, dateRange);
+    if (q3b.length > 0) Logger.log(`> Sample Display IS: ${q3b[0].metrics.contentImpressionShare}`);
+
+    const q3c = executeLocalQuery("Q3C_PMAX_IS", apiCid, QUERY_3C_PMAX_IS, dateRange);
+    if (q3c.length > 0) Logger.log(`> Sample PMax IS: ${q3c[0].metrics.searchImpressionShare}`);
+
+    // 3. RECOMMENDATIONS (Debug Mode)
+    const q4 = executeLocalQuery("Q4_ALL_RECS", apiCid, QUERY_4_DEBUG_RECS, null);
+    if (q4.length > 0) {
+        Logger.log("--- FOUND RECOMMENDATIONS ---");
+        q4.forEach(row => {
+            // Log every recommendation type found to identify the Demand Gen one
+            Logger.log(`Type: ${row.recommendation.type} | Campaign: ${row.recommendation.campaign}`);
+            if (row.recommendation.campaignBudgetRecommendation) {
+                Logger.log(`  >> IS BUDGET REC! Options: ${row.recommendation.campaignBudgetRecommendation.budgetOptions.length}`);
+            }
+        });
     } else {
-       Logger.log(`> WARNING: 0 rows. This account truly has NO active spend in this period.`);
+        Logger.log("No recommendations found via API.");
     }
-
-    // Q1B: Competitive (IS)
-    Logger.log('\n[Q1B Competitive] Fetching IS Data...');
-    let q1b = executeLocalQuery(apiCid, QUERY_1B_COMPETITIVE, dateRange);
-    Logger.log(`> Rows Returned: ${q1b.results?.length || 0}`);
-    if (q1b.results?.length > 0) {
-       const row = q1b.results[0];
-       Logger.log(`> Sample IS Data: ${row.campaign.id} | Search IS: ${row.metrics.searchImpressionShare}`);
-    }
-
-    // Q2: Targets
-    Logger.log('\n[Q2 Targets] Fetching...');
-    let q2 = executeLocalQuery(apiCid, QUERY_2_TARGETS, null);
-    Logger.log(`> Rows Returned: ${q2.results?.length || 0}`);
-
-    // Q4: Recommendations
-    Logger.log('\n[Q4 Recommendations] Fetching...');
-    let q4 = executeLocalQuery(apiCid, QUERY_4_RECOMMENDATIONS, null);
-    Logger.log(`> Rows Returned: ${q4.results?.length || 0}`);
-    if (q4.results?.length > 0) {
-       const rec = q4.results[0].campaignBudgetRecommendation.budgetOptions;
-       let minRec = Math.min(...rec.map(o => parseFloat(o.recommendedBudgetAmountMicros)));
-       Logger.log(`> Sample Rec: ${minRec} micros`);
-    }
-
-    Logger.log(`\n=== TEST COMPLETED ===`);
 
   } catch (e) {
-    Logger.log(`\n!!! FATAL ERROR !!!`);
-    Logger.log(`${e.message}`);
-    Logger.log(e.stack);
+    Logger.log(`\nFATAL EXCEPTION: ${e.message}\n${e.stack}`);
   }
+  
+  Logger.log("\n=== DEBUG RUN COMPLETE ===");
 }
