@@ -214,10 +214,10 @@ function testUnifiedCampaignReportWithAI() {
 }
 
 /**
- * Helper to call Gemini API (German Data Analyst Persona).
- * FIX: Uses 'gemini-2.5-flash' (Available Model).
- * FIX: Forces strict German terminology (Anteil entgangener Impressionen...).
- * FIX: Generates clean HTML list output.
+ * Helper to call Gemini API (German Analyst Persona).
+ * FIX: Generates clean HTML (ul/li) compatible with Gmail formatting.
+ * FIX: Removes Markdown, uses HTML tags for bolding.
+ * FIX: Prevents redundancy ("Wir verlieren entgangene...").
  */
 function callGeminiAI_(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
@@ -227,7 +227,7 @@ function callGeminiAI_(campaignData) {
 
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
-    DEINE AUFGABE: Erstelle eine pr?gnante Budget-Analyse f?r eine E-Mail an einen Kunden.
+    DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
 
     INPUT DATEN:
     ${JSON.stringify(campaignData, null, 2)}
@@ -236,33 +236,40 @@ function callGeminiAI_(campaignData) {
     1. Gib **ausschlie?lich** ein HTML-Fragment zur?ck (kein \`\`\`html Block, kein <body>).
     2. Nutze eine ungeordnete Liste: <ul> f?r den Container, <li> f?r die Punkte.
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
-    4. Nutze KEINE Schriftarten-Stile (kein style="font-family...").
+    4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
 
-    SPRACHREGELUNG (ZWINGEND EINHALTEN):
+    SPRACHREGELUNG (WICHTIG):
     - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
     - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
-    - "LostIS_Rank" -> "Anteil entgangener Impressionen aufgrund des Rangs"
-    - "MissedConversions" -> "entgangene Conversions"
-    - "Depletion" -> "Budget-Aussch?pfung"
     - "Target Met" -> "Ziel erreicht"
+    - "RecommendedBudget" -> "empfohlene Tagesbudget"
 
-    ANALYSE-STRATEGIE (Priorit?ten):
+    REGELN F?R DEN INHALT:
+    1. **Abwechslung:** Variiere den Satzbau. Vermeide es, jeden Punkt identisch zu beginnen ("Die Kampagne...").
+    2. **Keine Redundanz:** Schreibe NIEMALS "Wir verlieren entgangene Conversions". Das ist doppelt gemoppelt. 
+       - RICHTIG: "Uns entgehen rechnerisch ca. [X] Conversions" oder "Das ungenutzte Potenzial liegt bei [X] Conversions".
+    3. **Clustering:** Fasse Kampagnen mit gleicher Situation logisch zusammen.
+    4. **Tonalit?t:** Neutral, analytisch, l?sungsorientiert.
+
+    ANALYSE-PRIORIT?TEN:
     
-    1. **Effizienz-Skalierung:**
+    1. **Prio 1 (Effizienz-Skalierung):**
        - Wenn: Target Met = JA UND (Status = Limited ODER Depletion > 90%).
-       - Text: "Die Kampagnen <b>"Name"</b> arbeiten hocheffizient im Ziel, werden aber durch das Budget gedeckelt. Wir verlieren hierdurch ca. [MissedConversions] Conversions (Anteil entgangener Impressionen aufgrund des Budgets: [LostIS_Budget]). Empfehlung: Erh?hung auf <b>[RecBudget]</b>."
+       - Strategie: Betone, dass die Kampagne effizient l?uft, aber vom Budget limitiert wird. Nenne die "entgangenen Conversions" und den "Anteil entgangener Impressionen aufgrund des Budgets". Schlage die Erh?hung auf das <b>[RecommendedBudget]</b> vor.
 
-    2. **Wachstums-Potenzial:**
+    2. **Prio 2 (Wachstums-Potenzial):**
        - Wenn: Target = "No Target" UND Limited.
-       - Text: "Bei <b>"Name"</b> sehen wir eine extrem hohe Nachfrage, die das aktuelle Budget ?bersteigt. Um dieses Volumen zu pr?fen, empfehlen wir einen Test mit h?herem Budget."
+       - Strategie: Weise auf die starke Nachfrage hin, die das aktuelle Budget ?bersteigt. Empfiehl einen Test mit h?herem Budget, um das Volumen zu pr?fen.
 
-    3. **Kapazit?ts-Warnung:**
+    3. **Prio 3 (Kapazit?ts-Warnung):**
        - Wenn: Depletion > 85% (aber nicht limited).
-       - Text: "Die Kampagne <b>"Name"</b> ist zu [Depletion] ausgelastet. Eine Anpassung sichert die Sichtbarkeit an starken Tagen."
+       - Strategie: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
 
-    ZUSAMMENFASSUNG:
-    - Fasse ?hnliche Kampagnen in einem Punkt zusammen.
-    - Sei pr?zise, datengetrieben und professionell.
+    BEISPIEL OUTPUT (Stil-Referenz):
+    <ul>
+    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, sto?en jedoch t?glich an ihr Limit. Aktuell entgehen uns hierdurch rechnerisch ca. 20 Conversions pro Woche (Anteil entgangener Impressionen aufgrund des Budgets: 52%). Um dieses Potenzial voll auszusch?pfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
+    <li>Bei <b>"Demand Gen"</b> sehen wir eine extrem hohe Nachfrage, die das Budget von <b>EUR 200.00</b> vollst?ndig auslastet. Eine Anpassung w?rde helfen, die Sichtbarkeit an starken Tagen zu sichern.</li>
+    </ul>
   `;
 
   const payload = {
@@ -284,7 +291,6 @@ function callGeminiAI_(campaignData) {
     
     if (json.candidates && json.candidates.length > 0) {
       let text = json.candidates[0].content.parts[0].text;
-      // Clean up markdown blocks if AI adds them
       text = text.replace(/```html/g, "").replace(/```/g, "").trim();
       return text;
     } else {
