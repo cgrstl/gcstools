@@ -1,88 +1,121 @@
 /**
- * Test function to verify Search Impression Share data retrieval.
- * - Uses global InternalAdsApp.
- * - Avoids global variable collisions.
- * - Uses a local safe date helper to avoid SpreadsheetApp errors.
+ * DIAGNOSTIC FUNCTION: Search Impression Share
+ * - Bypasses the broken 'get7DayDateRange_' helper to avoid Spreadsheet errors.
+ * - Calculates dates locally using "Europe/Dublin".
+ * - Runs 3 probes to check visibility of Search Campaigns vs. IS Metrics.
  */
-function testSearchISMetrics() {
+function diagnoseSearchIS() {
   
   const TEST_CID_RAW = '6652886860'; 
 
-  Logger.log(`\n=== STARTING SEARCH IS TEST (CID: ${TEST_CID_RAW}) ===`);
-
-  // --- 1. Local Date Helper (Safe from Spreadsheet Error) ---
-  const getSafeDateRange = () => {
-    const timeZone = "Europe/Dublin"; // Hardcoded from your appsscript.json preference
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() - 1); 
-    const startDate = new Date(endDate.getTime());
-    startDate.setDate(endDate.getDate() - 6); 
-    
-    return {
-        start: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
-        end: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
-    };
-  };
+  Logger.log(`\n=== STARTING DIAGNOSTIC FOR CID: ${TEST_CID_RAW} ===`);
 
   try {
-    // --- 2. CID Conversion (Using Global InternalAdsApp) ---
+    // 1. CID Conversion (Using Global InternalAdsApp)
     const cidTrimmed = String(TEST_CID_RAW).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
     
-    if (!extIds || !extIds[cidTrimmed]) {
-        throw new Error(`CID Lookup Failed for ${TEST_CID_RAW}`);
-    }
+    if (!extIds || !extIds[cidTrimmed]) throw new Error("CID Lookup Failed");
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     Logger.log(`> API CID: ${apiCid}`);
 
-    // --- 3. Get Safe Date ---
-    const dates = getSafeDateRange();
-    Logger.log(`> Date Range: ${dates.start} to ${dates.end}`);
+    // 2. SAFE DATE CALCULATION (Local - No Spreadsheet Dependency)
+    // We hardcode the timezone to ensure this runs in the editor
+    const timeZone = "Europe/Dublin"; 
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() - 1); // Yesterday
+    const startDate = new Date(endDate.getTime());
+    startDate.setDate(endDate.getDate() - 6); // 7 days ago
+    
+    const dateRange = {
+        startDateStr: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
+        endDateStr: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
+    };
+    Logger.log(`> Date Range: ${dateRange.startDateStr} to ${dateRange.endDateStr}`);
 
-    // --- 4. Define Query (Locally to ensure correct "Search Only" filter) ---
-    // We use the values calculated above directly to avoid dependency issues
-    const QUERY_SEARCH_IS = `
+    // --- PROBE 1: BASIC VISIBILITY ---
+    // Can we see ANY Search campaigns?
+    Logger.log('\n[PROBE 1] Checking Campaign Visibility (No IS metrics)...');
+    const Q1_BASIC = `
       SELECT
         campaign.id,
         campaign.name,
-        metrics.search_impression_share,
-        metrics.search_impression_share_lost_budget,
-        metrics.search_impression_share_lost_rank
+        metrics.impressions,
+        metrics.cost_micros,
+        segments.date
       FROM
         campaign
       WHERE
         campaign.status = 'ENABLED' 
         AND campaign.advertising_channel_type = 'SEARCH'
-        AND segments.date BETWEEN '${dates.start}' AND '${dates.end}'
+        AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
     `;
-
-    // --- 5. Execute Query ---
-    Logger.log('\n[SEARCH IS QUERY] Fetching...');
+    // We use the global executeGAQLQuery, passing our safe local dates
+    const res1 = executeGAQLQuery(apiCid, Q1_BASIC, { dateRange: dateRange });
+    Logger.log(`> Rows Returned: ${res1.results?.length || 0}`);
     
-    const request = { customerId: apiCid, query: QUERY_SEARCH_IS };
-    const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
-    const response = JSON.parse(responseJson);
-    const results = response.results || [];
-
-    Logger.log(`> Rows Returned: ${results.length}`);
-    
-    if (results.length > 0) {
-        const count = Math.min(results.length, 3);
-        for (let i = 0; i < count; i++) {
-            const row = results[i];
-            Logger.log(`Row ${i+1}: "${row.campaign.name}"`);
-            Logger.log(`   - IS: ${row.metrics.searchImpressionShare}`);
-            Logger.log(`   - Lost Budget: ${row.metrics.searchImpressionShareLostBudget}`);
-            Logger.log(`   - Lost Rank: ${row.metrics.searchImpressionShareLostRank}`);
-        }
+    if (res1.results?.length > 0) {
+        const r = res1.results[0];
+        Logger.log(`> Sample: "${r.campaign.name}" | Impr: ${r.metrics.impressions} | Cost: ${r.metrics.costMicros}`);
     } else {
-        Logger.log("> No active Search campaigns found with data in this period.");
+        Logger.log("> WARNING: Probe 1 returned 0 rows. This means the API sees NO active Search campaigns with spend/impressions in this period.");
+    }
+
+    // --- PROBE 2: MAIN IS METRIC ONLY ---
+    // Does adding 'search_impression_share' break it?
+    Logger.log('\n[PROBE 2] Adding "search_impression_share"...');
+    const Q2_IS_ONLY = `
+      SELECT
+        campaign.id,
+        campaign.name,
+        metrics.impressions,
+        metrics.search_impression_share,
+        segments.date
+      FROM
+        campaign
+      WHERE
+        campaign.status = 'ENABLED' 
+        AND campaign.advertising_channel_type = 'SEARCH'
+        AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
+    `;
+    const res2 = executeGAQLQuery(apiCid, Q2_IS_ONLY, { dateRange: dateRange });
+    Logger.log(`> Rows Returned: ${res2.results?.length || 0}`);
+    
+    if (res2.results?.length > 0) {
+         Logger.log(`> Sample IS: ${res2.results[0].metrics.searchImpressionShare}`);
+    }
+
+    // --- PROBE 3: FULL METRICS ---
+    // The target query with Lost Budget/Rank
+    Logger.log('\n[PROBE 3] Full Query (IS + Lost Budget + Lost Rank)...');
+    const Q3_FULL = `
+      SELECT
+        campaign.id,
+        campaign.name,
+        metrics.search_impression_share,
+        metrics.search_impression_share_lost_budget,
+        metrics.search_impression_share_lost_rank,
+        segments.date
+      FROM
+        campaign
+      WHERE
+        campaign.status = 'ENABLED' 
+        AND campaign.advertising_channel_type = 'SEARCH'
+        AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
+    `;
+    const res3 = executeGAQLQuery(apiCid, Q3_FULL, { dateRange: dateRange });
+    Logger.log(`> Rows Returned: ${res3.results?.length || 0}`);
+    
+    if (res3.results?.length > 0) {
+         const r = res3.results[0];
+         Logger.log(`> Sample: IS=${r.metrics.searchImpressionShare} | LostBudget=${r.metrics.searchImpressionShareLostBudget} | LostRank=${r.metrics.searchImpressionShareLostRank}`);
+    } else if (res2.results?.length > 0) {
+         Logger.log("> WARNING: Probe 2 worked but Probe 3 failed. The 'Lost' metrics might be causing the filter.");
     }
 
   } catch (e) {
     Logger.log(`\nFATAL ERROR: ${e.message}`);
     Logger.log(e.stack);
   }
-  
-  Logger.log("\n=== TEST COMPLETED ===");
+  Logger.log("\n=== DIAGNOSTIC COMPLETED ===");
 }
