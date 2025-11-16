@@ -6,7 +6,7 @@
  */
 function testBudgetFieldsDirectly() {
   
-  const TEST_CID_RAW = '6652886860'; 
+  const TEST_CID_RAW = '6662487282'; 
   Logger.log(`\n=== STARTING DIRECT BUDGET FIELD TEST (CID: ${TEST_CID_RAW}) ===`);
 
   try {
