@@ -95,7 +95,8 @@ function processEmailRequest(formData) {
         }
         
         // Rufe die refaktorierte 100-6-Logik auf
-        const aiHtmlContent = getAiBudgetAnalysis_(cidRaw, formData.dateRange, reportDays);
+        // GIBT JETZT EIN OBJEKT ZUR?CK: { aiHtml, allCampaignsData, currency, externalCid }
+        const analysisResult = getAiBudgetAnalysis_(cidRaw, formData.dateRange, reportDays);
         Logger.log(`Row ${sheetRowNumber}: AI analysis generated.`);
 
         // --- 2.3 Alle Platzhalter vorbereiten (OHNE AI-INHALT) ---
@@ -113,7 +114,7 @@ function processEmailRequest(formData) {
 
         // SCHRITT 2: JETZT den AI-HTML-Platzhalter manuell ersetzen, *ohne* Escaping
         // Stellt sicher, dass der rohe HTML-Code von der KI direkt eingef?gt wird.
-        finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', aiHtmlContent);
+        finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', analysisResult.aiHtml);
         
         // (F?r den Plain-Text-Fallback ersetzen wir ihn auch, aber mit einer einfachen Meldung)
         finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', '(Dynamische Budget-Analyse - siehe HTML-Version)');
@@ -127,6 +128,9 @@ function processEmailRequest(formData) {
         // PDF-Anhang-Logik (derzeit ignoriert, wie angewiesen)
         if (formData.enablePdfAttachment) {
            Logger.log(`Row ${sheetRowNumber}: 'enablePdfAttachment' is true, but this feature is currently ignored as requested.`);
+           // HIER W?RDE DER AUFRUF F?R 04-3 HINKOMMEN
+           // const pdfBlob = createBudgetReportPdf_(analysisResult.allCampaignsData, ...);
+           // if (pdfBlob) finalAttachments.push(pdfBlob);
         }
 
         // --- 2.5 Entwurf erstellen ---
@@ -333,14 +337,18 @@ function executeAiQuery_(clientId, query, dateRangeString) {
 
 /**
  * Haupt-KI-Funktion, die die Analyse f?r eine CID und einen Datumsbereich durchf?hrt.
+ * GIBT JETZT EIN OBJEKT ZUR?CK: { aiHtml, allCampaignsData, currency, externalCid }
  * @param {string} cidRaw Die rohe CID (z.B. 123-456-7890)
  * @param {string} dateRangeString Der GAQL-Datumsstring (z.B. "LAST_7_DAYS")
  * @param {number} reportDays Die Anzahl der Tage (z.B. 7)
- * @return {string} Der von Gemini generierte HTML-String.
+ * @return {object} Ein Objekt mit { aiHtml, allCampaignsData, currency, externalCid }
  */
 function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
   Logger.log(`AI Analysis started for CID ${cidRaw}, Range: ${dateRangeString} (${reportDays} days)`);
-
+  
+  let externalCid = cidRaw; // Fallback
+  let currency = 'EUR'; // Fallback
+  
   try {
     const cidTrimmed = String(cidRaw).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
@@ -348,10 +356,11 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
         throw new Error(`(AI) CID Lookup Failed for ${cidRaw}`);
     }
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
+    externalCid = extIds[cidTrimmed]; // Speichern f?r PDF-Titel
 
     // 1. Alle Daten abrufen
     const curRes = executeAiQuery_(apiCid, AI_Q0_CURRENCY, null);
-    const currency = curRes[0]?.customer?.currencyCode || 'EUR';
+    currency = curRes[0]?.customer?.currencyCode || 'EUR';
 
     const resQ1 = executeAiQuery_(apiCid, AI_Q1_FINANCIALS, dateRangeString);
     const campaigns = new Map();
@@ -361,6 +370,7 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
       const reasons = row.campaign.primaryStatusReasons || [];
       const isStatusLimited = reasons.includes('BUDGET_CONSTRAINED');
       campaigns.set(row.campaign.id, {
+        id: row.campaign.id, // ID f?r PDF ben?tigt
         name: row.campaign.name, type: row.campaign.advertisingChannelType,
         strategy: row.campaign.biddingStrategyType,
         budget: parseFloat(row.campaignBudget.amountMicros || 0) / 1000000,
@@ -370,13 +380,20 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
         clicks: parseFloat(row.metrics.clicks || 0),
         impr: parseFloat(row.metrics.impressions || 0),
         targetType: '-', targetVal: 0, isShare: 0, lostBudget: 0, lostRank: 0,
-        recAmount: 0, isLimited: isStatusLimited
+        recAmount: 0, isLimited: isStatusLimited,
+        // Platzhalter f?r berechnete PDF-Felder
+        depletion: 0, targetStatus: 'No Target', missedConv: 0
       });
     });
 
     if (campaigns.size === 0) {
        Logger.log("No active campaigns found for AI analysis in this date range.");
-       return "<ul><li>Keine aktiven Kampagnendaten im ausgew?hlten Zeitraum gefunden.</li></ul>";
+       return {
+         aiHtml: "<ul><li>Keine aktiven Kampagnendaten im ausgew?hlten Zeitraum gefunden.</li></ul>",
+         allCampaignsData: [],
+         currency: currency,
+         externalCid: externalCid
+       };
     }
 
     // Ziele zusammenf?hren
@@ -416,8 +433,10 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
       }
     });
 
-    // --- 2. DATEN F?R KI VORBEREITEN ---
-    const campaignsToAnalyze = [];
+    // --- 2. DATEN F?R KI (UND PDF) VORBEREITEN ---
+    const campaignsToAnalyze = []; // Nur f?r KI
+    
+    // Iteriere ?ber ALLE Kampagnen, um PDF-Daten zu berechnen
     campaigns.forEach(c => {
       let depletion = 0;
       // WICHTIG: Verwendet die dynamische 'reportDays'-Variable
@@ -445,6 +464,11 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
         missedConv = (lostImpr * ctr * convRate);
       }
 
+      // F?ge berechnete Metriken dem *Hauptobjekt* f?r das PDF hinzu
+      c.depletion = depletion;
+      c.targetStatus = targetStatus;
+      c.missedConv = missedConv;
+
       // Nur interessante Kampagnen an KI senden
       if (c.isLimited || depletion > 85 || missedConv > 1) {
         campaignsToAnalyze.push({
@@ -464,18 +488,32 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
     Logger.log(`Sending ${campaignsToAnalyze.length} campaigns to Gemini AI...`);
 
     // --- 3. KI AUFRUFEN ---
+    let finalAiHtml;
     if (campaignsToAnalyze.length > 0) {
-      const aiResponse = callGeminiAI_budget(campaignsToAnalyze); // Aufruf der lokalen KI-Funktion
-      return aiResponse;
+      finalAiHtml = callGeminiAI_budget(campaignsToAnalyze); // Aufruf der lokalen KI-Funktion
     } else {
       Logger.log("No campaigns met the criteria for AI analysis.");
-      return "<ul><li>Alle Kampagnen laufen stabil. Keine unmittelbaren Budget-Anpassungen basierend auf den Kriterien (Limitierung, Auslastung >85% oder verpasste Conversions) erforderlich.</li></ul>";
+      finalAiHtml = "<ul><li>Alle Kampagnen laufen stabil. Keine unmittelbaren Budget-Anpassungen basierend auf den Kriterien (Limitierung, Auslastung >85% oder verpasste Conversions) erforderlich.</li></ul>";
     }
+
+    // Gib das volle Objekt zur?ck
+    return {
+      aiHtml: finalAiHtml,
+      allCampaignsData: Array.from(campaigns.values()), // Die *komplette* Liste
+      currency: currency,
+      externalCid: externalCid
+    };
 
   } catch (e) {
     Logger.log(`FATAL ERROR in getAiBudgetAnalysis_ (CID: ${cidRaw}): ${e.message}`);
     Logger.log(e.stack);
-    return `<ul><li><b>Fehler bei der KI-Analyse f?r CID ${cidRaw}:</b> ${e.message}</li></ul>`;
+    // Gib ein Fehlerobjekt zur?ck, damit processEmailRequest nicht fehlschl?gt
+    return {
+      aiHtml: `<ul><li><b>Fehler bei der KI-Analyse f?r CID ${cidRaw}:</b> ${e.message}</li></ul>`,
+      allCampaignsData: [],
+      currency: currency,
+      externalCid: externalCid
+    };
   }
 }
 
