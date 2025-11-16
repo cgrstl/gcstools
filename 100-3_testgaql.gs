@@ -1,37 +1,19 @@
 /**
- * Final Verification Test: Search Impression Share (Aggregated).
- * * FIX 1: REMOVES 'segments.date' from SELECT clause.
- * - This forces the API to return aggregated 7-day stats.
- * - This prevents 0-row returns caused by daily segmentation thresholds.
- * * FIX 2: Uses local, safe date calculation to avoid SpreadsheetApp errors.
+ * Isolated test for Search Impression Share metrics.
+ * - Targets: Active SEARCH campaigns only.
+ * - Metrics: IS, Lost IS (Budget), Lost IS (Rank).
+ * - Strategy: 7-Day Aggregation (No daily segmentation) to maximize data availability.
  */
-function testSearchISMetrics() {
-
-  // 1. SETUP
-  const TEST_CID_RAW = '6652886860'; 
+function testSearchISMetricsOnly() {
   
-  // We define the query LOCALLY to ensure 'segments.date' is NOT in the SELECT clause.
-  // It remains in the WHERE clause to filter the time period.
-  const QUERY_SEARCH_IS_AGGREGATE = `
-    SELECT
-      campaign.id,
-      campaign.name,
-      metrics.search_impression_share,
-      metrics.search_impression_share_lost_budget,
-      metrics.search_impression_share_lost_rank
-    FROM
-      campaign
-    WHERE
-      campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type = 'SEARCH'
-      AND segments.date BETWEEN 'START_DATE' AND 'END_DATE'
-  `;
+  const TEST_CID_RAW = '6652886860'; 
+  Logger.log(`\n=== STARTING SEARCH IS TEST (CID: ${TEST_CID_RAW}) ===`);
 
-  Logger.log(`\n=== STARTING AGGREGATE IS TEST (CID: ${TEST_CID_RAW}) ===`);
-
-  // 2. SAFE DATE HELPER (Local)
+  // --- 1. Local Helpers (Safe & Isolated) ---
+  
   const getSafeDateRange = () => {
-    const timeZone = "Europe/Dublin"; // As per appsscript.json
+    // Hardcoded to match your JSON config ("Europe/Dublin")
+    const timeZone = "Europe/Dublin"; 
     const endDate = new Date();
     endDate.setDate(endDate.getDate() - 1); // Yesterday
     const startDate = new Date(endDate.getTime());
@@ -44,51 +26,62 @@ function testSearchISMetrics() {
   };
 
   try {
-    // 3. CID CONVERSION
+    // --- 2. CID Validation ---
     const cidTrimmed = String(TEST_CID_RAW).trim();
-    // Relies on your global InternalAdsApp
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
     
-    let apiCid;
-    if (extIds && extIds[cidTrimmed]) {
-        apiCid = extIds[cidTrimmed].replace(/-/g, '');
-    } else {
+    if (!extIds || !extIds[cidTrimmed]) {
         throw new Error(`CID Lookup Failed for ${TEST_CID_RAW}`);
     }
+    const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     Logger.log(`> API CID: ${apiCid}`);
 
-    // 4. PREPARE QUERY
+    // --- 3. Date Range ---
     const dates = getSafeDateRange();
     Logger.log(`> Date Range: ${dates.start} to ${dates.end}`);
-    
-    const finalQuery = QUERY_SEARCH_IS_AGGREGATE
-        .replace('START_DATE', dates.start)
-        .replace('END_DATE', dates.end);
 
-    Logger.log(`> Querying for AGGREGATE metrics (No daily segmentation)...`);
+    // --- 4. The Specific Query ---
+    // Removing 'segments.date' from SELECT is key for aggregation.
+    // We are NOT requesting 'cost' or 'conversions', just the IS metrics.
+    const QUERY = `
+      SELECT
+        campaign.id,
+        campaign.name,
+        metrics.search_impression_share,
+        metrics.search_impression_share_lost_budget,
+        metrics.search_impression_share_lost_rank
+      FROM
+        campaign
+      WHERE
+        campaign.status = 'ENABLED' 
+        AND campaign.advertising_channel_type = 'SEARCH'
+        AND segments.date BETWEEN '${dates.start}' AND '${dates.end}'
+    `;
 
-    // 5. EXECUTE
-    const request = { customerId: apiCid, query: finalQuery };
+    Logger.log(`\n[EXECUTING QUERY]...`);
+    Logger.log(`Query: ${QUERY}`);
+
+    // --- 5. Execute ---
+    const request = { customerId: apiCid, query: QUERY };
     const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
     const response = JSON.parse(responseJson);
     const results = response.results || [];
 
+    // --- 6. Report ---
     Logger.log(`> Rows Returned: ${results.length}`);
     
     if (results.length > 0) {
-        Logger.log("\n--- SUCCESS: DATA FOUND ---");
-        // Log first 3 rows
+        Logger.log("--- SUCCESS: DATA FOUND ---");
         const count = Math.min(results.length, 3);
         for (let i = 0; i < count; i++) {
             const row = results[i];
-            // Note: 0.0999 indicates < 10%
             Logger.log(`Row ${i+1}: "${row.campaign.name}"`);
-            Logger.log(`   - Avg IS: ${row.metrics.searchImpressionShare}`);
-            Logger.log(`   - Avg Lost Budget: ${row.metrics.searchImpressionShareLostBudget}`);
-            Logger.log(`   - Avg Lost Rank: ${row.metrics.searchImpressionShareLostRank}`);
+            Logger.log(`   - Search IS: ${row.metrics.searchImpressionShare}`);
+            Logger.log(`   - Lost Budget: ${row.metrics.searchImpressionShareLostBudget}`);
+            Logger.log(`   - Lost Rank: ${row.metrics.searchImpressionShareLostRank}`);
         }
     } else {
-        Logger.log("> WARNING: 0 rows returned. Even aggregated data is missing.");
+        Logger.log("> WARNING: 0 rows returned. The API returned no data for these specific metrics.");
     }
 
   } catch (e) {
