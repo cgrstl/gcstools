@@ -214,52 +214,53 @@ function testUnifiedCampaignReportWithAI() {
 }
 
 /**
- * Helper to call Gemini API (German Strategist Persona - Advanced Logic).
- * FIX: Uses 'gemini-2.5-flash' (Available Model).
- * FIX: Complex Prompt with specific Data-Usage instructions.
+ * Helper to call Gemini API (German Analyst Persona - Neutral Tone).
+ * Uses 'gemini-2.5-flash' (Available Model).
  */
 function callGeminiAI_(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!API_KEY) return "ERROR: 'GEMINI_API_KEY' missing.";
 
-  // Use the model confirmed in your logs
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
   const prompt = `
-    DU BIST: Ein Senior Google Ads Performance-Stratege.
-    DEINE AUFGABE: Analysiere die Kampagnendaten und erstelle eine hoch-?berzeugende, datengetriebene Budget-Empfehlung f?r einen Kunden auf Deutsch.
+    DU BIST: Ein Senior Google Ads Daten-Analyst.
+    DEINE AUFGABE: Erstelle eine sachliche, pr?zise Analyse der Budget-Situation f?r einen Kunden auf Deutsch.
 
     INPUT DATEN:
     ${JSON.stringify(campaignData, null, 2)}
 
-    ANALYSE-LOGIK (Nutze diese Datenpunkte f?r deine Argumentation):
-    1. **Efficiency Check:** "TargetStatus" (Werden Ziele wie ROAS/CPA erreicht?).
-    2. **Constraint Check:** "Status" (Limited) & "Depletion" (Wie nah am Limit?).
-    3. **Competitive Check:** "LostIS_Rank" (Verlieren wir, weil wir schlecht bieten?) vs. "LostIS_Budget" (Verlieren wir nur, weil das Budget leer ist?). 
-       -> *Hinweis: Niedriger Lost Rank + Hoher Lost Budget ist das st?rkste Signal f?r Skalierung!*
-    4. **Opportunity Check:** "MissedConversions" (Wie viel Gesch?ft entgeht uns konkret?).
+    ANALYSE-LOGIK (Nutze diese Datenpunkte f?r die Bewertung):
+    1. Efficiency: "TargetStatus" (Werden Ziele wie ROAS/CPA erreicht?).
+    2. Constraint: "Status" (Limited) & "Depletion" (Wie nah am Limit?).
+    3. Opportunity: "MissedConversions" (Verlorenes Potenzial) & "LostIS_Budget" (Anteil entgangener Impressionen durch Budget).
 
     REGELN F?R DEN OUTPUT:
-    1. **Format:** Erstelle NUR eine Liste mit Bullet-Points (?). Keine Einleitung, keine Gru?formel.
-    2. **Clustering:** Fasse Kampagnen mit identischer Diagnose in einem Punkt zusammen.
-    3. **Argumentation:** Nutze die oben genannten Checks, um "Warum" zu erkl?ren.
-       - *Beispiel:* "Wir verlieren hier kaum Impressionen durch das Ranking (gute Gebote), aber massiv durch das Budget..."
+    1. **Format:** Erstelle NUR eine Liste mit Bullet-Points (?). Keine Einleitung, keine Gru?formel, keine Fettgedruckten ?berschriften am Anfang der Bullets (wie "Skalierung:").
+    2. **Kampagnennamen:** Kampagnennamen m?ssen IMMER in doppelten Anf?hrungszeichen stehen (z.B. "Kampagne A"). Nutze KEINE Fettung (**).
+    3. **Tonalit?t:** Neutral, analytisch, datengetrieben. Vermeide verk?uferische Begriffe wie "Slam Dunk", "Garantie", "enorm", "freisetzen". Nutze stattdessen "Potenzial", "Effizienz", "begrenzt", "empfohlen".
+    4. **Clustering:** Fasse Kampagnen mit identischer Diagnose und Empfehlung in einem einzigen Bullet-Point zusammen, um den Text kurz zu halten.
 
-    PRIORIT?TS-HIERARCHIE (Arbeite diese Kategorien ab):
+    INHALTLICHE VORGABEN (Hierarchie):
 
-    1. **"DIE SKALIERUNGS-GARANTIE" (Slam Dunk)**
+    1. PRIO 1 (Effizient aber Limitiert):
        - Bedingung: Target Met = JA **UND** (Status = Limited ODER Depletion > 90%).
-       - Argumentation: "Hier l?uft alles perfekt (Ziel erreicht, Ranking stark), aber das Budget w?rgt die Performance ab. Wir verlieren [X]% Impressionen rein durch das Budget und verpassen ca. [Y] Conversions. Eine Erh?hung auf [RecBudget] ist hier risikofrei und bringt sofortigen Umsatz."
+       - Analyse: Best?tige, dass die Effizienzziele (ROAS/CPA) erreicht werden, die Auslieferung jedoch durch das Budget beschr?nkt ist.
+       - Daten: Nenne "LostIS_Budget" (in %) und "MissedConversions" als Beleg f?r das Potenzial.
+       - Empfehlung: Nenne die konkrete "RecommendedBudget" Summe zur Erh?hung.
 
-    2. **"DIE WACHSTUMS-CHANCE" (High Demand)**
+    2. PRIO 2 (Hohe Nachfrage ohne festes Ziel):
        - Bedingung: Target = "No Target" **UND** MissedConversions > 5.
-       - Argumentation: "Die Nachfrage ist extrem hoch und die Kampagne l?uft t?glich ins Limit. Obwohl kein festes CPA-Ziel gesetzt ist, sehen wir ein Potenzial von [Y] zus?tzlichen Conversions pro Woche. Wir empfehlen einen Test mit h?herem Budget, um diese Nachfrage abzusch?pfen."
+       - Analyse: Stelle fest, dass die Kampagne aufgrund hoher Nachfrage das Tagesbudget aussch?pft.
+       - Empfehlung: Vorschlag einer Budget-Anpassung, um das Volumen zu pr?fen.
 
-    3. **"DIE SICHERHEITS-WARNUNG" (Capacity)**
+    3. PRIO 3 (Hohe Auslastung):
        - Bedingung: Status = Eligible **ABER** Depletion > 85%.
-       - Argumentation: "Diese Kampagnen laufen stabil, kratzen aber an der Kapazit?tsgrenze ([X]% Auslastung). Um an starken Tagen (z.B. Wochenende/Feiertage) keine Sichtbarkeit zu verlieren, empfehlen wir einen Puffer."
+       - Analyse: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
 
-    WICHTIG: Nenne immer konkrete Zahlen (Betr?ge, %-Werte, Anzahl Conversions) aus den Daten, um die Aussage zu beweisen.
+    BEISPIEL FORMAT (So soll es aussehen):
+    ? Die Kampagnen "Shopping" und "Generic Search" erreichen ihre ROAS-Ziele, sind jedoch durch das Tagesbudget begrenzt (Lost IS Budget: ~52%). Rechnerisch entgehen dadurch aktuell ca. [X] Conversions. Eine Erh?hung auf [Betrag] wird empfohlen, um dieses Potenzial zu nutzen.
+    ? Bei der Kampagne "Demand Gen" liegt eine hohe Auslastung von [X]% vor. Um die Nachfrage vollst?ndig zu bedienen...
   `;
 
   const payload = {
