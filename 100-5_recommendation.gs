@@ -1,94 +1,79 @@
 /**
- * Test 100-5: Budget Recommendations (OptiScore).
- * - Source: 'recommendation' resource (Date Independent).
- * - Scope: All 6 Campaign Types (Search, Display, Video, PMax, Demand Gen, Shopping).
- * - Output: "YES ( [Min Recommended Budget] )"
+ * Test 100-5: Budget Simulation Exploration.
+ * Purpose: To find recommended budget amounts when the standard 'recommendation' resource is empty.
+ * Source: 'campaign_simulation' (The backing data for budget forecasts).
  */
-function testBudgetRecommendations() {
+function testBudgetSimulations() {
   
-  const TEST_CID_RAW = '6662487282'; // Your Internal CID
-  Logger.log(`\n=== STARTING BUDGET RECOMMENDATION TEST (CID: ${TEST_CID_RAW}) ===`);
-
-  // --- 1. GAQL QUERY ---
-  // We select campaign details directly from the recommendation resource.
-  // We filter strictly for 'CAMPAIGN_BUDGET' recommendations.
-  const QUERY = `
-    SELECT
-      campaign.id,
-      campaign.name,
-      campaign.advertising_channel_type,
-      recommendation.campaign_budget_recommendation.budget_options
-    FROM
-      recommendation
-    WHERE
-      recommendation.type = 'CAMPAIGN_BUDGET'
-  `;
+  const TEST_CID_RAW = '6662487282'; 
+  Logger.log(`\n=== STARTING BUDGET SIMULATION TEST (CID: ${TEST_CID_RAW}) ===`);
 
   try {
-    // --- 2. CID CONVERSION ---
+    // 1. CID Conversion
     const cidTrimmed = String(TEST_CID_RAW).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
-    
-    let apiCid;
-    if (extIds && extIds[cidTrimmed]) {
-        apiCid = extIds[cidTrimmed].replace(/-/g, '');
-    } else {
-        throw new Error(`CID Lookup Failed for ${TEST_CID_RAW}`);
-    }
+    if (!extIds || !extIds[cidTrimmed]) throw new Error("CID Lookup Failed");
+    const apiCid = extIds[cidTrimmed].replace(/-/g, '');
     Logger.log(`> API CID: ${apiCid}`);
 
-    // --- 3. EXECUTE QUERY ---
-    Logger.log('\n[FETCHING OPTISCORE RECOMMENDATIONS]...');
-    const request = { customerId: apiCid, query: QUERY };
-    const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
-    const response = JSON.parse(responseJson);
-    const results = response.results || [];
+    // 2. Find Limited Campaigns (To get IDs)
+    const Q_LIMITED = `
+      SELECT campaign.id, campaign.name 
+      FROM campaign 
+      WHERE campaign.status = 'ENABLED' AND campaign.primary_status_reasons CONTAINS ANY ('BUDGET_CONSTRAINED')
+    `;
+    const resLimited = JSON.parse(InternalAdsApp.search(JSON.stringify({ customerId: apiCid, query: Q_LIMITED }), { version: 'v19' })).results || [];
+    
+    if (resLimited.length === 0) {
+        Logger.log("> No campaigns found with 'BUDGET_CONSTRAINED' status via API.");
+        return;
+    }
 
-    Logger.log(`> Recommendations Found: ${results.length}`);
+    const limitedIds = resLimited.map(r => r.campaign.id);
+    Logger.log(`> Found ${limitedIds.length} Limited Campaigns: ${limitedIds.join(', ')}`);
 
-    // --- 4. PROCESS & REPORT ---
-    if (results.length > 0) {
-      Logger.log("\n--- CAMPAIGNS WITH BUDGET RECOMMENDATIONS ---");
-      
-      results.forEach((row, index) => {
-         const campName = row.campaign.name;
-         const campType = row.campaign.advertisingChannelType;
-         const options = row.recommendation.campaignBudgetRecommendation.budgetOptions;
-         
-         // Find Minimum Recommended Budget
-         let minBudgetMicros = Infinity;
-         
-         if (options && options.length > 0) {
-             // Map options to find the lowest value
-             options.forEach(opt => {
-                 const amount = parseFloat(opt.recommendedBudgetAmountMicros);
-                 if (amount < minBudgetMicros) {
-                     minBudgetMicros = amount;
-                 }
-             });
-         }
-         
-         // Format the output
-         let recommendationString = "NO"; // Default fallback
-         if (minBudgetMicros !== Infinity) {
-             const formattedAmount = (minBudgetMicros / 1000000).toFixed(2);
-             recommendationString = `YES ( ${formattedAmount} )`;
-         }
+    // 3. Query Simulations for these Campaigns
+    // We look for Type = BUDGET to get budget-specific points
+    const Q_SIM = `
+      SELECT 
+        campaign_simulation.campaign_id,
+        campaign_simulation.type,
+        campaign_simulation.budget_point_list.points
+      FROM campaign_simulation
+      WHERE 
+        campaign_simulation.type = 'BUDGET'
+        AND campaign_simulation.campaign_id IN (${limitedIds.join(',')})
+    `;
 
-         // Log formatted result
-         Logger.log(`${index + 1}. [${campType}] "${campName}"`);
-         Logger.log(`   -> Budget Recommendation: ${recommendationString}`);
-      });
-      
+    Logger.log('\n[FETCHING SIMULATIONS]...');
+    const resSim = JSON.parse(InternalAdsApp.search(JSON.stringify({ customerId: apiCid, query: Q_SIM }), { version: 'v19' })).results || [];
+    
+    if (resSim.length > 0) {
+        resSim.forEach(row => {
+            const campId = row.campaignSimulation.campaignId;
+            const points = row.campaignSimulation.budgetPointList.points;
+            
+            Logger.log(`\nCampaign ID: ${campId}`);
+            if (points && points.length > 0) {
+                Logger.log(`> Found ${points.length} Simulation Points.`);
+                // Log the first 3 points as examples (usually current, low, high)
+                points.slice(0, 3).forEach((pt, i) => {
+                    const budget = parseFloat(pt.budgetAmountMicros) / 1000000;
+                    const clicks = pt.clicks;
+                    const cost = parseFloat(pt.costMicros) / 1000000;
+                    Logger.log(`   Point ${i+1}: Budget ${budget.toFixed(2)} -> Est. Cost ${cost.toFixed(2)} | Clicks ${clicks}`);
+                });
+            } else {
+                Logger.log("> No data points in simulation.");
+            }
+        });
     } else {
-      Logger.log("> No 'Limited by Budget' recommendations found in OptiScore.");
-      Logger.log("  (This means Google currently sees no budget limitations for any campaign).");
+        Logger.log("> No simulations returned. (Google may not have generated forecast data for these campaigns yet).");
     }
 
   } catch (e) {
     Logger.log(`\nFATAL ERROR: ${e.message}`);
     Logger.log(e.stack);
   }
-  
   Logger.log("\n=== TEST COMPLETED ===");
 }
