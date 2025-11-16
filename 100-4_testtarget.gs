@@ -1,8 +1,7 @@
 /**
- * Test 100-4: Budget Depletion & Smart Bidding Performance (FIXED).
- * - Scope: All Active Campaigns.
- * - Metric 1: Budget Depletion.
- * - Metric 2: Target Met/Not Met (Robust check for Maximize strategies with Targets).
+ * Test 100-4: Budget Depletion & Smart Bidding Performance.
+ * FIX: Rounds Actual vs Target metrics to 2 decimals to prevent floating-point errors.
+ * FIX: Ensures strict equality (e.g., 2.50 vs 2.50) counts as "Target Met".
  */
 function testBudgetAndBiddingLogic() {
 
@@ -27,6 +26,12 @@ function testBudgetAndBiddingLogic() {
     };
   };
 
+  // Rounds a number to 2 decimal places and returns a Number (not string)
+  const toFixedNumber = (num) => {
+      if (!num || isNaN(num)) return 0;
+      return Math.round((num + Number.EPSILON) * 100) / 100;
+  };
+
   // --- 3. EXECUTION ---
   try {
     // A. CID Conversion
@@ -41,7 +46,6 @@ function testBudgetAndBiddingLogic() {
     Logger.log(`> Date Range: ${dates.start} to ${dates.end} (${REPORT_DAYS_COUNT} Days)`);
 
     // C. Define Query
-    // CRITICAL FIX: Added maximize_conversion_value.target_roas and maximize_conversions.target_cpa_micros
     const QUERY = `
       SELECT
         campaign.id,
@@ -93,45 +97,59 @@ function testBudgetAndBiddingLogic() {
                 depletionPct = (avgDailySpend / dailyBudget) * 100;
             }
             
-            // 3. Analyze Bidding Target (Logic Fixed for Maximize Strategies)
+            // 3. Analyze Bidding Target (With ROUNDING Fix)
             let targetReport = "-";
             let targetDebug = "";
             
             // --- ROAS LOGIC ---
-            // Check both explicit Target ROAS and Max Conv Value with Target ROAS
-            let targetRoas = 0;
+            let rawTargetRoas = 0;
             if (bidStrategy === 'TARGET_ROAS') {
-                targetRoas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
+                rawTargetRoas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
             } else if (bidStrategy === 'MAXIMIZE_CONVERSION_VALUE') {
-                targetRoas = parseFloat(row.campaign.maximizeConversionValue?.targetRoas || 0);
+                rawTargetRoas = parseFloat(row.campaign.maximizeConversionValue?.targetRoas || 0);
             }
 
-            if (targetRoas > 0) {
+            if (rawTargetRoas > 0) {
                 if (cost7Days > 0) {
-                    const actualRoas = convValue / cost7Days;
-                    const met = actualRoas >= targetRoas;
+                    // Calculate raw actual
+                    const rawActualRoas = convValue / cost7Days;
+                    
+                    // Round both to 2 decimals for fair comparison
+                    const actualRounded = toFixedNumber(rawActualRoas);
+                    const targetRounded = toFixedNumber(rawTargetRoas);
+                    
+                    // Comparison: Actual >= Target
+                    const met = actualRounded >= targetRounded;
+                    
                     targetReport = met ? "YES (Target Met)" : "NO (Missed)";
-                    targetDebug = `(Act. ROAS: ${actualRoas.toFixed(2)} vs Tgt: ${targetRoas.toFixed(2)})`;
+                    targetDebug = `(Act: ${actualRounded} vs Tgt: ${targetRounded})`;
                 } else {
                     targetReport = "- (0 Spend)";
                 }
             }
 
             // --- CPA LOGIC ---
-            // Check both explicit Target CPA and Max Conversions with Target CPA
-            let targetCpa = 0;
+            let rawTargetCpa = 0;
             if (bidStrategy === 'TARGET_CPA') {
-                 targetCpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0) / 1000000;
+                 rawTargetCpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0) / 1000000;
             } else if (bidStrategy === 'MAXIMIZE_CONVERSIONS') {
-                 targetCpa = parseFloat(row.campaign.maximizeConversions?.targetCpaMicros || 0) / 1000000;
+                 rawTargetCpa = parseFloat(row.campaign.maximizeConversions?.targetCpaMicros || 0) / 1000000;
             }
 
-            if (targetCpa > 0) {
+            if (rawTargetCpa > 0) {
                  if (conversions > 0) {
-                    const actualCpa = cost7Days / conversions;
-                    const met = actualCpa <= targetCpa;
+                    // Calculate raw actual
+                    const rawActualCpa = cost7Days / conversions;
+                    
+                    // Round both to 2 decimals
+                    const actualRounded = toFixedNumber(rawActualCpa);
+                    const targetRounded = toFixedNumber(rawTargetCpa);
+                    
+                    // Comparison: Actual <= Target
+                    const met = actualRounded <= targetRounded;
+                    
                     targetReport = met ? "YES (Target Met)" : "NO (Missed)";
-                    targetDebug = `(Act. CPA: ${actualCpa.toFixed(2)} vs Tgt: ${targetCpa.toFixed(2)})`;
+                    targetDebug = `(Act: ${actualRounded} vs Tgt: ${targetRounded})`;
                  } else {
                     targetReport = "NO (0 Conv)";
                  }
@@ -142,8 +160,8 @@ function testBudgetAndBiddingLogic() {
             Logger.log(`   - Budget: ${dailyBudget.toFixed(2)}/day | 7-Day Spend: ${cost7Days.toFixed(2)}`);
             Logger.log(`   - Depletion: ${depletionPct.toFixed(2)}%`);
             Logger.log(`   - Strategy: ${bidStrategy}`);
-            // Only show target status if a target was actually found (ROAS or CPA)
-            if (targetRoas > 0 || targetCpa > 0) {
+            
+            if (rawTargetRoas > 0 || rawTargetCpa > 0) {
                 Logger.log(`   - Target Status: ${targetReport} ${targetDebug}`);
             } else {
                 Logger.log(`   - Target Status: - (No Target Set)`);
