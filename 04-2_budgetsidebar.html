@@ -38,38 +38,33 @@ button:disabled { cursor: not-allowed; opacity: 0.6; background-color: #f0f0f0; 
 }
 .result-actions button { display: inline-block; width: auto; margin: 10px 5px 0 5px; }
 
-/* --- Inactive/Disabled States (kept for consistency) --- */
+/* --- Inactive/Disabled States --- */
 input:disabled, select:disabled, textarea:disabled {
   cursor: not-allowed; opacity: 0.7;
 }
 input[type=checkbox]:disabled { opacity: 0.6; }
 input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: normal; cursor: default; }
 
-/* --- ACTIVE/INACTIVE TOGGLE STYLES (CORRECTED) --- */
-
-/* Apply gray style (font-weight: normal) when the checkbox is UNCHECKED */
+/* Active/Inactive Toggles */
 #enableBccSharedInbox:not(:checked) + label.inline-label,
 #enableBccPop:not(:checked) + label.inline-label,
 #enablePdfAttachment:not(:checked) + label.inline-label { 
   color: #999;
-  font-weight: normal; /* Ensure it's not bold when inactive/unchecked */
+  font-weight: normal;
 }
-
-/* Ensure default style (font-weight: normal) when the checkbox is CHECKED */
 #enableBccSharedInbox:checked + label.inline-label,
 #enableBccPop:checked + label.inline-label,
 #enablePdfAttachment:checked + label.inline-label { 
-  color: initial; /* Revert to default text color */
-  font-weight: normal; /* Ensure it is explicitly NOT bold when active */
+  color: initial;
+  font-weight: normal;
 }
 
-/* Placeholder Group Styles (retained) */
+/* Placeholder Group Styles */
 .placeholder-group.inactive { border-left-color: #ddd; }
 .placeholder-group.inactive .placeholder-field label { color: #999; font-weight: normal; }
 .placeholder-group:not(.inactive) .placeholder-field label { color: inherit; font-weight: bold; }
-/* End Styles */
 
-/* Specific layouts (retained) */
+/* Specific layouts */
 .info-note { 
     font-size: 0.9em; 
     color: #555; 
@@ -83,6 +78,70 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     margin-bottom: 15px;
 }
 .info-note code { background-color: #ddd; padding: 1px 3px; border-radius: 3px; font-family: monospace; }
+
+/* NEW: Style from 03-2 for Date Range */
+.lookback-group select { width: 100%; padding: 8px; margin-bottom: 0; }
+.lookback-group { margin-bottom: 15px; }
+
+
+/* NEW: Styles for File Drop Zone */
+.drop-zone {
+  border: 2px dashed #ccc;
+  border-radius: 5px;
+  padding: 25px;
+  text-align: center;
+  color: #777;
+  cursor: pointer;
+  position: relative;
+  margin-bottom: 15px;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+.drop-zone.drag-over {
+  border-color: #3498db;
+  background-color: #f0f8ff;
+}
+.drop-zone input[type=file] {
+  /* Hide the actual input but make it fill the space */
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+#fileList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.9em;
+}
+#fileList li {
+  padding: 5px 8px;
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  margin-bottom: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  word-break: break-all;
+}
+#fileList li span {
+  padding-right: 10px;
+}
+#fileList li button {
+  padding: 2px 8px;
+  font-size: 1.1em;
+  border: none;
+  background-color: transparent;
+  color: #999;
+  cursor: pointer;
+  line-height: 1;
+}
+#fileList li button:hover {
+  color: #333;
+}
+
+
 /* Status/Results Area (retained) */
 #statusMessage { margin-top: 15px; text-align: center; font-weight: bold; min-height: 1.2em; }
 .status-error { color: red; }
@@ -107,7 +166,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     
     <label for="cidCol" class="required">Google Ads CID column</label>
     <select id="cidCol"></select>
-    <p class="info-note">Select the column containing the client's 10-digit Google Ads ID (e.g., <code>123-456-7890</code>). This ID is required to fetch performance data for the PDF report.</p>
+    <p class="info-note">Select the column containing the client's 10-digit Google Ads ID (e.g., <code>123-456-7890</code>). This ID is required to fetch performance data.</p>
     
     <label for="recipientCol" class="required">Recipient email column</label>
     <select id="recipientCol"></select>
@@ -115,7 +174,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 
     <label for="subjectLine" class="required">Subject line of Gmail draft</label>
     <input type="text" id="subjectLine" placeholder="Enter exact draft subject line">
-    <p class="info-note">First, create an email draft in your Gmail 'Drafts' folder. Enter the <strong>exact subject line</strong> of that draft here. The script will use its body as the template. A PDF report will be automatically attached.</p>
+    <p class="info-note">First, create an email draft in your Gmail 'Drafts' folder. Enter the <strong>exact subject line</strong> of that draft here. The script will use its body as the template.</p>
 
     <label for="ccCol" class="bold-label">Recipient email CC column</label>
     <select id="ccCol"><option value="" selected>None</option></select>
@@ -131,24 +190,39 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     </div>
   </div>
 
+  <!-- UPDATED: Section Renamed and Date Range Added -->
   <div class="form-group optional-group">
-    <h3>PDF Budget Report</h3>
-    <div class="info-note placeholder-note"> 
-        If enabled, a budget report for all active campaigns in the corresponding account will be generated and attached to your email draft. See example **here**.
+    <h3>Report Configuration</h3>
+    <p class="info-note placeholder-note"> 
+        Configure data generation options for the email content and attachments.
+    </p>
+
+    <!-- NEW: Date Range Dropdown -->
+    <div class="lookback-group">
+      <label for="dateRange" class="required">Date Range</label>
+      <select id="dateRange" required>
+        <option value="" disabled selected>Select period</option>
+        <option value="LAST_7_DAYS">Last 7 Days</option>
+        <option value="LAST_14_DAYS">Last 14 Days</option>
+        <option value="LAST_30_DAYS">Last 30 Days</option>
+      </select>
+      <!-- <p class="info-note">Select the time period for the campaign performance data.</p> --> <!-- REMOVED -->
     </div>
     
+    <!-- EXISTING: PDF Toggle -->
     <div id="pdfAttachmentGroup" style="margin-bottom: 15px;"> 
         <div style="display: flex; align-items: center;">
             <input type="checkbox" id="enablePdfAttachment">
-            <label for="enablePdfAttachment" class="inline-label">Attach PDF Budget Report</label>
+            <label for="enablePdfAttachment" class="inline-label">Attach PDF Campaign Budget Report</label>
         </div>
     </div>
   </div>
   
   <div class="form-group optional-group">
     <h3>Placeholders</h3>
-    <p class="info-note">Define placeholders like <code>{{ContactName}}</code> to personalize your email. Enter the tag below and select the corresponding column. Note: Dynamic data blocks for budget data will be inserted using specific placeholders in your draft (e.g., [Block 1]).</p>
-
+    <p class="info-note">Define placeholders like <code>{{ContactName}}</code> to personalize your email. Enter the tag below and select the corresponding column. Note: Dynamic data blocks for budget data will be inserted using specific placeholders in your draft (e.g., <code>[BUDGET_TABLE]</code>).</p>
+    
+    <!-- Placeholder 1-5 controls (unchanged) -->
     <div id="placeholder1Group" class="placeholder-group inactive">
         <div class="placeholder-activation">
             <input type="checkbox" id="activatePlaceholder1"><label for="activatePlaceholder1" class="inline-label">Activate Placeholder 1</label>
@@ -206,6 +280,19 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     </div>
   </div>
   
+  <!-- NEW: File Attachment Section -->
+  <div class="form-group optional-group">
+    <h3>Attach File(s) to Email draft</h3>
+    <p class="info-note">You can attach additional files (e.g., reports, images) to the email draft. Files are uploaded when you click "Start drafting".</p>
+    
+    <!-- Styled file input -->
+    <div id="dropZone" class="drop-zone">
+      <input type="file" id="fileInput" multiple>
+      <p id="dropZoneText">Drag & drop files here, or click to select</p>
+    </div>
+    <ul id="fileList"></ul> <!-- To show selected files -->
+  </div>
+  
   <div class="button-container">
     <button id="draftButton" class="draft-button">Start drafting</button>
   </div>
@@ -233,6 +320,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 
 <script>
   let currentResults = null;
+  let attachedFiles = []; // NEW: Store file data
 
   // --- Helper Functions (Retained) ---
   const allColumnLetters = (() => { const letters = []; for (let i = 0; i < 26; i++) letters.push(String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('A' + String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('B' + String.fromCharCode(65 + i)); return letters; })();
@@ -245,15 +333,90 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   const formContent = document.getElementById('formContent'), loadingState = document.getElementById('loadingState'), loadingActionText = document.getElementById('loadingActionText'), resultsView = document.getElementById('resultsView'), resultsTitle = document.getElementById('resultsTitle'), 
       draftButton = document.getElementById('draftButton'), statusMessage = document.getElementById('statusMessage'), processedCountMessage = document.getElementById('processedCountMessage'), errorReportSection = document.getElementById('errorReportSection'), errorList = document.getElementById('errorList'), closeButton = document.getElementById('closeButton'), runAgainButton = document.getElementById('runAgainButton');
   
-  // NEW REFERENCES
   const cidCol = document.getElementById('cidCol');
   const bccPopCheckbox = document.getElementById('enableBccPop');
-  const enablePdfAttachmentCheckbox = document.getElementById('enablePdfAttachment');
+  const enablePdfAttachmentCheckbox = document.getElementById('enablePdfAttachment'); // This ID already existed
 
-  // EXISTING REFERENCES
   const phCheckboxes = [1, 2, 3, 4, 5].map(i => document.getElementById(`activatePlaceholder${i}`));
   const phControls = [1, 2, 3, 4, 5].map(i => ({ group: document.getElementById(`placeholder${i}Group`), colSelect: document.getElementById(`placeholder${i}Col`), nameInput: document.getElementById(`placeholder${i}Name`) }));
   const bccSharedInboxCheckbox = document.getElementById('enableBccSharedInbox');
+
+  // --- NEW: File Handling Functions ---
+
+  /** Handles the file list from input or drop */
+  function handleFiles(files) {
+    if (statusMessage) { statusMessage.textContent = ''; }
+    
+    for (const file of files) {
+      // Check if file with same name already exists
+      if (attachedFiles.some(f => f.filename === file.name)) {
+        if(statusMessage) { statusMessage.textContent = `File "${file.name}" is already added.`; statusMessage.className = 'status-error'; }
+        continue;
+      }
+      
+      const fileId = "file_" + Date.now() + "_" + Math.random();
+      attachedFiles.push({
+        id: fileId,
+        filename: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        base64data: null // Not yet loaded
+      });
+      updateFileList(); // Show "loading"
+      
+      readFileAsBase64(file, fileId);
+    }
+  }
+  
+  /** Reads a file and stores its Base64 data */
+  function readFileAsBase64(file, fileId) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64String = e.target.result.split(',')[1]; // Get only the Base64 part
+      const fileIndex = attachedFiles.findIndex(f => f.id === fileId);
+      if (fileIndex > -1) {
+        attachedFiles[fileIndex].base64data = base64String;
+      }
+      updateFileList(); // Update to remove "loading"
+    };
+    reader.onerror = (e) => {
+      console.error("FileReader error:", e);
+      // Remove the failed file
+      attachedFiles = attachedFiles.filter(f => f.id !== fileId);
+      updateFileList();
+      if(statusMessage) { statusMessage.textContent = `Error reading file "${file.name}".`; statusMessage.className = 'status-error'; }
+    };
+    reader.readAsDataURL(file);
+  }
+  
+  /** Updates the visual file list UI */
+  function updateFileList() {
+    const fileListEl = document.getElementById('fileList');
+    if (!fileListEl) return;
+    fileListEl.innerHTML = '';
+    
+    attachedFiles.forEach(file => {
+      const li = document.createElement('li');
+      const isLoading = file.base64data === null;
+      li.innerHTML = `
+        <span>${file.filename} ${isLoading ? '(Loading...)' : ''}</span>
+        <button data-fileid="${file.id}">&times;</button>
+      `;
+      li.querySelector('button').addEventListener('click', (e) => {
+        e.stopPropagation(); // Prevent dropzone click
+        removeFile(file.id);
+      });
+      fileListEl.appendChild(li);
+    });
+  }
+  
+  /** Removes a file from the list */
+  function removeFile(fileId) {
+    attachedFiles = attachedFiles.filter(f => f.id !== fileId);
+    updateFileList();
+  }
+
+  // --- End File Handling Functions ---
+
 
   /** Updates placeholder states (Retained) */
   function updatePlaceholderStates() {
@@ -281,7 +444,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     });
   }
 
-  /** Shows the main form view, hides others (Retained) */
+  /** Shows the main form view, hides others (UPDATED) */
   function showFormView() {
       if (statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
       if (resultsView) resultsView.style.display = 'none';
@@ -289,11 +452,24 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       if (formContent) formContent.style.display = 'block';
       if (draftButton) draftButton.disabled = false;
       currentResults = null;
+      
+      // NEW: Clear file list on form reset
+      attachedFiles = [];
+      updateFileList();
   }
 
-  /** Handles button clicks for Send or Draft (UPDATED for draft-only, cidCol, new BCC, and PDF toggle) */
+  /** Handles button clicks (UPDATED) */
   function handleButtonClick(actionType) {
     if(statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
+    
+    // NEW: Check if any files are still loading
+    if (attachedFiles.some(f => f.base64data === null)) {
+      if(statusMessage) {
+        statusMessage.innerHTML = 'Error:<br>Files are still uploading. Please wait.';
+        statusMessage.className = 'status-error';
+      }
+      return; // Stop submission
+    }
     
     // GATHER ALL FORM DATA
     const formData = {
@@ -304,9 +480,20 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       subjectLine: document.getElementById('subjectLine').value.trim(),
       bccSharedInbox: bccSharedInboxCheckbox.checked,
       bccPop: bccPopCheckbox.checked, 
+      
+      // NEW/UPDATED FIELDS
+      dateRange: document.getElementById('dateRange').value, // From new dropdown
       enablePdfAttachment: enablePdfAttachmentCheckbox.checked, 
+      
       actionType: 'draft', // Forced to draft
-      placeholders: []
+      placeholders: [],
+      
+      // NEW: Add processed files
+      attachedFiles: attachedFiles.map(f => ({
+        filename: f.filename,
+        mimeType: f.mimeType,
+        base64data: f.base64data
+      }))
     };
 
     let errorMessages = [];
@@ -317,6 +504,9 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     if (!formData.cidCol) { errorMessages.push('Select Google Ads CID column (required for data retrieval).'); } 
     if (!formData.recipientCol) { errorMessages.push('Select Recipient email column.'); }
     if (!formData.subjectLine) { errorMessages.push('Enter Subject line (must match Gmail draft).'); }
+    
+    // NEW: Validation for Date Range
+    if (!formData.dateRange) { errorMessages.push('Select a Date Range.'); }
 
     // Validation: Placeholders (Retained)
     phCheckboxes.forEach((checkbox, index) => {
@@ -431,7 +621,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   }
 
 
-  // --- Initial Setup (UPDATED with Event Listener for Example Link) ---
+  // --- Initial Setup (UPDATED) ---
   document.addEventListener('DOMContentLoaded', (event) => {
       try {
           // Populate dropdowns 
@@ -444,6 +634,42 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
           if (closeButton) closeButton.addEventListener('click', () => google.script.host.close());
           if (runAgainButton) runAgainButton.addEventListener('click', showFormView);
           phCheckboxes.forEach(checkbox => { if (checkbox) checkbox.addEventListener('change', updatePlaceholderStates); });
+          
+          // NEW: Event Listeners for File Drop Zone
+          const dropZone = document.getElementById('dropZone');
+          const fileInput = document.getElementById('fileInput');
+
+          if (dropZone && fileInput) {
+            // Click to open file dialog
+            dropZone.addEventListener('click', (e) => {
+                if(e.target.id !== 'fileInput') {
+                  fileInput.click();
+                }
+            });
+            
+            // Drag events
+            dropZone.addEventListener('dragover', (e) => {
+              e.preventDefault();
+              dropZone.classList.add('drag-over');
+            });
+            dropZone.addEventListener('dragleave', () => {
+              dropZone.classList.remove('drag-over');
+            });
+            dropZone.addEventListener('drop', (e) => {
+              e.preventDefault();
+              dropZone.classList.remove('drag-over');
+              if (e.dataTransfer.files) {
+                handleFiles(e.dataTransfer.files);
+              }
+            });
+            
+            // File input change
+            fileInput.addEventListener('change', (e) => {
+              if (e.target.files) {
+                handleFiles(e.target.files);
+              }
+            });
+          }
           
           // Initial UI State
           updatePlaceholderStates();
