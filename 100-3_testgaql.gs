@@ -1,12 +1,13 @@
 /**
- * Final Corrected Test for Search & PMax IS Metrics.
- * - Now includes PERFORMANCE_MAX to verify metric compatibility.
+ * Final Corrected Test for Search, PMax & Shopping IS Metrics.
+ * - Includes SEARCH, PERFORMANCE_MAX, and SHOPPING.
  * - Uses AGGREGATION (no date segment) to maximize data availability.
  */
-function testSearchAndPMaxISMetrics() {
+function testSearchPMaxShoppingISMetrics() {
   
+  // Using the CID from your snippet
   const TEST_CID_RAW = '6662487282'; 
-  Logger.log(`\n=== STARTING SEARCH & PMAX IS TEST (CID: ${TEST_CID_RAW}) ===`);
+  Logger.log(`\n=== STARTING SEARCH, PMAX & SHOPPING IS TEST (CID: ${TEST_CID_RAW}) ===`);
 
   // 1. Date Helper
   const getSafeDateRange = () => {
@@ -32,7 +33,7 @@ function testSearchAndPMaxISMetrics() {
     const dates = getSafeDateRange();
     Logger.log(`> Date Range: ${dates.start} to ${dates.end}`);
 
-    // 3. Define Query (Updated for SEARCH + PMAX)
+    // 3. Define Query (Updated to include SHOPPING)
     const QUERY = `
       SELECT
         campaign.id,
@@ -45,7 +46,7 @@ function testSearchAndPMaxISMetrics() {
         campaign
       WHERE
         campaign.status = 'ENABLED' 
-        AND campaign.advertising_channel_type IN ('SEARCH', 'PERFORMANCE_MAX')
+        AND campaign.advertising_channel_type IN ('SEARCH', 'PERFORMANCE_MAX', 'SHOPPING')
         AND segments.date BETWEEN '${dates.start}' AND '${dates.end}'
     `;
 
@@ -60,8 +61,8 @@ function testSearchAndPMaxISMetrics() {
     
     if (results.length > 0) {
         Logger.log("--- SUCCESS: DATA FOUND ---");
-        // Log sample rows to see if PMax appears
-        const count = Math.min(results.length, 5);
+        // Log up to 10 rows to see a mix of campaign types
+        const count = Math.min(results.length, 10);
         for (let i = 0; i < count; i++) {
             const row = results[i];
             Logger.log(`Row ${i+1}: [${row.campaign.advertisingChannelType}] "${row.campaign.name}"`);
