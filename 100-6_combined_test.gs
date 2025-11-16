@@ -214,8 +214,10 @@ function testUnifiedCampaignReportWithAI() {
 }
 
 /**
- * Helper to call Gemini API (German Analyst Persona - Neutral Tone).
- * Uses 'gemini-2.5-flash' (Available Model).
+ * Helper to call Gemini API (German Data Analyst Persona).
+ * FIX: Uses 'gemini-2.5-flash' (Available Model).
+ * FIX: Forces strict German terminology (Anteil entgangener Impressionen...).
+ * FIX: Generates clean HTML list output.
  */
 function callGeminiAI_(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
@@ -225,42 +227,42 @@ function callGeminiAI_(campaignData) {
 
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
-    DEINE AUFGABE: Erstelle eine sachliche, pr?zise Analyse der Budget-Situation f?r einen Kunden auf Deutsch.
+    DEINE AUFGABE: Erstelle eine pr?gnante Budget-Analyse f?r eine E-Mail an einen Kunden.
 
     INPUT DATEN:
     ${JSON.stringify(campaignData, null, 2)}
 
-    ANALYSE-LOGIK (Nutze diese Datenpunkte f?r die Bewertung):
-    1. Efficiency: "TargetStatus" (Werden Ziele wie ROAS/CPA erreicht?).
-    2. Constraint: "Status" (Limited) & "Depletion" (Wie nah am Limit?).
-    3. Opportunity: "MissedConversions" (Verlorenes Potenzial) & "LostIS_Budget" (Anteil entgangener Impressionen durch Budget).
+    TECHNISCHE FORMATIERUNG (WICHTIG F?R GMAIL):
+    1. Gib **ausschlie?lich** ein HTML-Fragment zur?ck (kein \`\`\`html Block, kein <body>).
+    2. Nutze eine ungeordnete Liste: <ul> f?r den Container, <li> f?r die Punkte.
+    3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
+    4. Nutze KEINE Schriftarten-Stile (kein style="font-family...").
 
-    REGELN F?R DEN OUTPUT:
-    1. **Format:** Erstelle NUR eine Liste mit Bullet-Points (?). Keine Einleitung, keine Gru?formel, keine Fettgedruckten ?berschriften am Anfang der Bullets (wie "Skalierung:").
-    2. **Kampagnennamen:** Kampagnennamen m?ssen IMMER in doppelten Anf?hrungszeichen stehen (z.B. "Kampagne A"). Nutze KEINE Fettung (**).
-    3. **Tonalit?t:** Neutral, analytisch, datengetrieben. Vermeide verk?uferische Begriffe wie "Slam Dunk", "Garantie", "enorm", "freisetzen". Nutze stattdessen "Potenzial", "Effizienz", "begrenzt", "empfohlen".
-    4. **Clustering:** Fasse Kampagnen mit identischer Diagnose und Empfehlung in einem einzigen Bullet-Point zusammen, um den Text kurz zu halten.
+    SPRACHREGELUNG (ZWINGEND EINHALTEN):
+    - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
+    - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
+    - "LostIS_Rank" -> "Anteil entgangener Impressionen aufgrund des Rangs"
+    - "MissedConversions" -> "entgangene Conversions"
+    - "Depletion" -> "Budget-Aussch?pfung"
+    - "Target Met" -> "Ziel erreicht"
 
-    INHALTLICHE VORGABEN (Hierarchie):
+    ANALYSE-STRATEGIE (Priorit?ten):
+    
+    1. **Effizienz-Skalierung:**
+       - Wenn: Target Met = JA UND (Status = Limited ODER Depletion > 90%).
+       - Text: "Die Kampagnen <b>"Name"</b> arbeiten hocheffizient im Ziel, werden aber durch das Budget gedeckelt. Wir verlieren hierdurch ca. [MissedConversions] Conversions (Anteil entgangener Impressionen aufgrund des Budgets: [LostIS_Budget]). Empfehlung: Erh?hung auf <b>[RecBudget]</b>."
 
-    1. PRIO 1 (Effizient aber Limitiert):
-       - Bedingung: Target Met = JA **UND** (Status = Limited ODER Depletion > 90%).
-       - Analyse: Best?tige, dass die Effizienzziele (ROAS/CPA) erreicht werden, die Auslieferung jedoch durch das Budget beschr?nkt ist.
-       - Daten: Nenne "LostIS_Budget" (in %) und "MissedConversions" als Beleg f?r das Potenzial.
-       - Empfehlung: Nenne die konkrete "RecommendedBudget" Summe zur Erh?hung.
+    2. **Wachstums-Potenzial:**
+       - Wenn: Target = "No Target" UND Limited.
+       - Text: "Bei <b>"Name"</b> sehen wir eine extrem hohe Nachfrage, die das aktuelle Budget ?bersteigt. Um dieses Volumen zu pr?fen, empfehlen wir einen Test mit h?herem Budget."
 
-    2. PRIO 2 (Hohe Nachfrage ohne festes Ziel):
-       - Bedingung: Target = "No Target" **UND** MissedConversions > 5.
-       - Analyse: Stelle fest, dass die Kampagne aufgrund hoher Nachfrage das Tagesbudget aussch?pft.
-       - Empfehlung: Vorschlag einer Budget-Anpassung, um das Volumen zu pr?fen.
+    3. **Kapazit?ts-Warnung:**
+       - Wenn: Depletion > 85% (aber nicht limited).
+       - Text: "Die Kampagne <b>"Name"</b> ist zu [Depletion] ausgelastet. Eine Anpassung sichert die Sichtbarkeit an starken Tagen."
 
-    3. PRIO 3 (Hohe Auslastung):
-       - Bedingung: Status = Eligible **ABER** Depletion > 85%.
-       - Analyse: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
-
-    BEISPIEL FORMAT (So soll es aussehen):
-    ? Die Kampagnen "Shopping" und "Generic Search" erreichen ihre ROAS-Ziele, sind jedoch durch das Tagesbudget begrenzt (Lost IS Budget: ~52%). Rechnerisch entgehen dadurch aktuell ca. [X] Conversions. Eine Erh?hung auf [Betrag] wird empfohlen, um dieses Potenzial zu nutzen.
-    ? Bei der Kampagne "Demand Gen" liegt eine hohe Auslastung von [X]% vor. Um die Nachfrage vollst?ndig zu bedienen...
+    ZUSAMMENFASSUNG:
+    - Fasse ?hnliche Kampagnen in einem Punkt zusammen.
+    - Sei pr?zise, datengetrieben und professionell.
   `;
 
   const payload = {
@@ -281,7 +283,10 @@ function callGeminiAI_(campaignData) {
     const json = JSON.parse(response.getContentText());
     
     if (json.candidates && json.candidates.length > 0) {
-      return json.candidates[0].content.parts[0].text;
+      let text = json.candidates[0].content.parts[0].text;
+      // Clean up markdown blocks if AI adds them
+      text = text.replace(/```html/g, "").replace(/```/g, "").trim();
+      return text;
     } else {
       return `AI Error: ${JSON.stringify(json)}`;
     }
