@@ -1,243 +1,226 @@
 /**
- * @file 04-1_budgetsender.gs
- * @description Core function for fetching Google Ads data, generating the dynamic 
- * PDF report, inserting content blocks into the draft, and saving the personalized draft.
+ * @file 04-1_budet.gs (NEU: Version 2.0 - AI Integrated)
+ * @description Verarbeitet E-Mail-Entw?rfe f?r Budget-Empfehlungen.
+ * Diese Version integriert die KI-Logik aus 100-6, um dynamisch
+ * Budget-Analysen von Gemini zu holen und in E-Mail-Entw?rfe einzuf?gen.
  * @OnlyCurrentDoc
  * @Needs GmailApp
  * @Needs SpreadsheetApp
- * @Needs InternalAdsApp 
+ * @Needs InternalAdsApp
+ * @Needs UrlFetchApp
+ * @Needs PropertiesService
  */
 
 // ================================================================
-// GAQL QUERY DEFINITIONS
-// ================================================================
-
-const DATE_PLACEHOLDER_START = 'YYYY-MM-DD_START';
-const DATE_PLACEHOLDER_END = 'YYYY-MM-DD_END';
-const CAMPAIGN_TYPES_FILTER = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN'";
-
-const GAQL_QUERY_0_CURRENCY = `
-  SELECT customer.currency_code
-  FROM customer
-`;
-
-const GAQL_QUERY_1_PERFORMANCE = `
-  SELECT
-    campaign.id,
-    campaign.name,
-    campaign.status,
-    campaign.advertising_channel_type,
-    campaign_budget.amount_micros,
-    campaign.bidding_strategy_type,
-    metrics.conversions,
-    metrics.conversions_value,
-    metrics.cost_micros,
-    metrics.clicks,
-    metrics.search_impression_share,
-    metrics.search_impression_share_lost_budget,
-    metrics.search_impression_share_lost_rank,
-    metrics.content_impression_share,
-    metrics.content_budget_lost_impression_share,
-    segments.date
-  FROM
-    campaign
-  WHERE
-    campaign.status = 'ENABLED' 
-    AND campaign.advertising_channel_type IN (${CAMPAIGN_TYPES_FILTER})
-    AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
-`;
-
-const GAQL_QUERY_2_TARGETS = `
-  SELECT
-    campaign.id,
-    campaign.target_cpa.target_cpa_micros,
-    campaign.target_roas.target_roas
-  FROM
-    campaign
-  WHERE
-    campaign.status = 'ENABLED' 
-    AND campaign.advertising_channel_type IN (${CAMPAIGN_TYPES_FILTER})
-    AND campaign.bidding_strategy_type IN ('TARGET_CPA', 'TARGET_ROAS', 'MAXIMIZE_CONVERSION_VALUE', 'MAXIMIZE_CONVERSIONS')
-`;
-
-const GAQL_QUERY_4_RECOMMENDATIONS = `
-  SELECT
-    recommendation.campaign,
-    recommendation.campaign_budget_recommendation.budget_options
-  FROM
-    recommendation
-  WHERE
-    recommendation.type = 'CAMPAIGN_BUDGET'
-`;
-
-
-// ================================================================
-// CORE PROCESSING FUNCTION (Called by the new sidebar)
+// CORE PROCESSING FUNCTION (Called by 04-2_budgetsidebar.html)
 // ================================================================
 
 /**
- * Processes a Budget Recommendation request from the sidebar.
- * @param {object} formData An object containing user selections.
- * @returns {object} A categorized results object for the sidebar.
+ * Verarbeitet eine E-Mail-Anfrage aus der Budget-Sidebar.
+ * Holt Daten, findet einen Gmail-Entwurf, generiert KI-Inhalte,
+ * f?llt Platzhalter und erstellt einen Entwurf.
+ *
+ * @param {object} formData Ein Objekt mit den Benutzereingaben aus der Sidebar.
+ * @return {object} Ein kategorisiertes Ergebnisobjekt f?r die Sidebar.
  */
 function processEmailRequest(formData) {
-    Logger.log(`--- START processBudgetRecommendationRequest ---`);
+  Logger.log(`--- START processBudgetRecommendationRequest (AI) ---`);
+  Logger.log(`Received formData: ${JSON.stringify(formData)}`);
 
-    const results = {
-        processedRowCount: 0,
-        actionType: 'draft',
-        succeeded: [],
-        failedInput: [],
-        failedProcessing: []
-    };
+  const results = {
+    processedRowCount: 0,
+    actionType: 'draft',
+    succeeded: [],
+    failedInput: [],
+    failedProcessing: []
+  };
 
-    try {
-        // --- 1. SETUP & VALIDATION ---
-        const ss = SpreadsheetApp.getActiveSpreadsheet();
-        const sheet = ss.getActiveSheet();
-        
-        // Use integrated helpers for column mapping
-        const executionColIndex = columnLetterToIndex_(formData.executionCol, sheet);
-        const cidColIndex = columnLetterToIndex_(formData.cidCol, sheet);
-        const recipientColIndex = columnLetterToIndex_(formData.recipientCol, sheet);
-        const ccColIndex = formData.ccCol ? columnLetterToIndex_(formData.ccCol, sheet) : -1;
+  try {
+    // --- 1. SETUP & VALIDATION ---
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getActiveSheet();
 
-        if (executionColIndex === -1 || cidColIndex === -1 || recipientColIndex === -1) {
-            throw new Error('Core settings (Trigger, CID, or Recipient Column) are missing or invalid.');
-        }
+    // Spaltenindizes abrufen (verwendet 100-1_helperstools.gs)
+    const executionColIndex = columnLetterToIndex_(formData.executionCol, sheet);
+    const cidColIndex = columnLetterToIndex_(formData.cidCol, sheet);
+    const recipientColIndex = columnLetterToIndex_(formData.recipientCol, sheet);
+    const ccColIndex = formData.ccCol ? columnLetterToIndex_(formData.ccCol, sheet) : -1;
 
-        const placeholderMap = buildPlaceholderMap_(formData, sheet); 
-        const emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true); 
-        const triggeredRows = getTriggeredRows_(sheet, executionColIndex); 
-        results.processedRowCount = triggeredRows.length;
+    if (executionColIndex === -1) throw new Error(`Invalid Trigger Column: ${formData.executionCol}`);
+    if (cidColIndex === -1) throw new Error(`Invalid Google Ads CID Column: ${formData.cidCol}`);
+    if (recipientColIndex === -1) throw new Error(`Invalid Recipient Column: ${formData.recipientCol}`);
 
-        if (triggeredRows.length === 0) {
-            results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: "No rows marked '1' found to process." });
-            return results;
-        }
-        
-        const dateRange = get7DayDateRange_(); 
+    // Standard-Platzhalter-Map erstellen (verwendet 100-1_helperstools.gs)
+    const placeholderMap = buildPlaceholderMap_budget(formData, sheet);
 
-        // --- 2. START ROW ITERATION ---
-        triggeredRows.forEach(triggeredRow => {
-            const sheetRowNumber = triggeredRow.rowNumber;
-            const rowData = triggeredRow.data;
-            const cidRaw = rowData[cidColIndex]?.toString().trim() ?? "";
-            const recipientRaw = rowData[recipientColIndex]?.toString().trim() ?? "";
-            const ccRaw = (ccColIndex !== -1 && ccColIndex < rowData.length) ? (rowData[ccColIndex]?.toString().trim() ?? "") : "";
-            
-            try {
-                // --- 2.1 CID Validation & Conversion (Uses globally available InternalAdsApp) ---
-                let apiCid;
-                if (!cidRaw) throw new Error("Missing Google Ads Client ID.");
-                
-                // Uses the global InternalAdsApp object for CID lookup/validation
-                const externalIds = InternalAdsApp.getExternalCustomerIds([cidRaw]); 
-                if (externalIds && externalIds[cidRaw]) {
-                    // Assuming externalIds[cidRaw] returns XXX-XXX-XXXX format
-                    apiCid = externalIds[cidRaw].replace(/-/g, '');
-                } else {
-                    throw new Error("Invalid CID or No Access from Ads API (InternalAdsApp failed lookup).");
-                }
+    // Gmail-Vorlage holen
+    const emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true);
 
-                // --- 2.2 DATA FETCH (4 GAQL Queries) ---
-                
-                // Q0: Currency Code
-                const currencyQueryResponse = executeGAQLQuery(apiCid, GAQL_QUERY_0_CURRENCY);
-                const clientCurrencyCode = currencyQueryResponse.results[0]?.customer?.currencyCode || 'EUR';
-                
-                // Q1: Universal Data 
-                const perfData = executeGAQLQuery(apiCid, GAQL_QUERY_1_PERFORMANCE, { dateRange });
-                if (!perfData.results || perfData.results.length === 0) throw new Error("No active campaign data found in the last 7 days.");
-                
-                // Q2: Target Bids
-                const targetData = executeGAQLQuery(apiCid, GAQL_QUERY_2_TARGETS); 
-                
-                // Q4: Recommendations
-                const recommendationData = executeGAQLQuery(apiCid, GAQL_QUERY_4_RECOMMENDATIONS);
+    // Trigger-Zeilen holen (verwendet 100-1_helperstools.gs)
+    const triggeredRows = getTriggeredRows_(sheet, executionColIndex);
+    results.processedRowCount = triggeredRows.length;
 
-                // --- 2.3 DATA PROCESSING & CALCULATIONS ---
-                
-                const mergedCampaigns = mergeAndCalculateData(
-                    perfData.results, targetData.results, recommendationData.results, clientCurrencyCode
-                );
-
-                // Filter only budget-limited campaigns for the report
-                const budgetLimitedCampaigns = mergedCampaigns.filter(c => c.isBudgetLimited === 'Ja');
-
-                // --- 2.4 DYNAMIC CONTENT GENERATION ---
-                
-                const tableHtml = generateBudgetTableHtml(budgetLimitedCampaigns, clientCurrencyCode);
-                
-                const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap); 
-                
-                const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
-                
-                let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
-                // Replace Block placeholder with generated HTML table ([BUDGET_TABLE] assumed)
-                finalBodyHtml = finalBodyHtml.replace('[BUDGET_TABLE]', tableHtml);
-
-                // --- 2.5 PDF REPORT GENERATION (CONDITIONAL) ---
-                
-                let pdfBlob = null;
-                const finalAttachments = [...emailTemplate.attachments];
-                
-                if (formData.enablePdfAttachment && budgetLimitedCampaigns.length > 0) {
-                    pdfBlob = createCampaignReportPdf(budgetLimitedCampaigns, clientCurrencyCode, apiCid);
-                    if (pdfBlob) {
-                        finalAttachments.push(pdfBlob);
-                    }
-                }
-
-                // --- 2.6 DRAFT CREATION ---
-                
-                const options = {
-                    htmlBody: finalBodyHtml,
-                    cc: ccRaw.replace(/;\s*/g, ',').trim() || undefined,
-                    attachments: finalAttachments,
-                    inlineImages: emailTemplate.inlineImages,
-                    bcc: buildBccString_({ 
-                        sharedInbox: formData.bccSharedInbox, 
-                        pop: formData.bccPop 
-                    })
-                };
-                
-                GmailApp.createDraft(recipientRaw, finalSubject, emailTemplate.message.text, options);
-                results.succeeded.push({ row: sheetRowNumber, recipient: recipientRaw, details: `Draft saved successfully` });
-                
-            } catch (e) {
-                const errorMsg = e.message.substring(0, 200);
-                Logger.log(`Row ${sheetRowNumber}: ERROR processing for "${recipientRaw}": ${errorMsg}`);
-                
-                if (e.message.includes("CID") || e.message.includes("Recipient") || e.message.includes("InternalAdsApp")) {
-                    results.failedInput.push({ row: sheetRowNumber, recipient: recipientRaw, details: errorMsg });
-                } else {
-                    results.failedProcessing.push({ row: sheetRowNumber, recipient: recipientRaw, details: errorMsg });
-                }
-            }
-        }); 
-
-        Logger.log(`Budget processing complete. Summary: Succeeded: ${results.succeeded.length}, FailedInput: ${results.failedInput.length}, FailedProcessing: ${results.failedProcessing.length}`);
-        return results;
-
-    } catch (e) {
-        Logger.log(`FATAL ERROR in processBudgetRecommendationRequest: ${e.message} \n Stack: ${e.stack}`);
-        results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: `Script Error: ${e.message}` });
-        return results;
+    if (triggeredRows.length === 0) {
+      results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: "No rows marked '1' found to process." });
+      return results;
     }
+
+    // Angeh?ngte Dateien aus Base64 konvertieren (falls vorhanden)
+    const userAttachments = convertBase64ToBlobs_(formData.attachedFiles || []);
+    Logger.log(`Verarbeite ${userAttachments.length} vom Benutzer hochgeladene Anh?nge.`);
+
+    // --- 2. START ROW ITERATION ---
+    triggeredRows.forEach(triggeredRow => {
+      const sheetRowNumber = triggeredRow.rowNumber;
+      const rowData = triggeredRow.data;
+
+      // Daten f?r diese Zeile extrahieren
+      const cidRaw = rowData[cidColIndex]?.toString().trim() ?? "";
+      const recipientRaw = rowData[recipientColIndex]?.toString().trim() ?? "";
+      const ccRaw = (ccColIndex !== -1 && ccColIndex < rowData.length) ? (rowData[ccColIndex]?.toString().trim() ?? "") : "";
+
+      try {
+        // --- 2.1 Zeilenvalidierung ---
+        if (!cidRaw) throw new Error("Missing Google Ads Client ID.");
+        if (!recipientRaw || !recipientRaw.includes('@')) throw new Error(`Invalid recipient email: "${recipientRaw}"`);
+
+        // --- 2.2 KI-DATEN GENERIEREN (Der neue Schritt) ---
+        Logger.log(`Row ${sheetRowNumber}: Generating AI analysis for CID ${cidRaw} with range ${formData.dateRange}...`);
+        
+        // Bestimme die Anzahl der Tage f?r die Depletion-Berechnung
+        // Wirft einen Fehler, wenn dateRange ung?ltig ist (z.B. "LAST_7_DAYS_INVALID")
+        const reportDays = parseInt(formData.dateRange.replace('LAST_', '').replace('_DAYS', ''));
+        if (isNaN(reportDays)) {
+          throw new Error(`Invalid dateRange value received from sidebar: ${formData.dateRange}`);
+        }
+        
+        // Rufe die refaktorierte 100-6-Logik auf
+        const aiHtmlContent = getAiBudgetAnalysis_(cidRaw, formData.dateRange, reportDays);
+        Logger.log(`Row ${sheetRowNumber}: AI analysis generated.`);
+
+        // --- 2.3 Alle Platzhalter vorbereiten ---
+        const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap);
+        
+        // F?ge den speziellen KI-Platzhalter hinzu
+        // WICHTIG: Der Platzhalter im Gmail-Entwurf muss exakt {{ai_budget_recommendations}} lauten
+        rowDataForPlaceholders['{{ai_budget_recommendations}}'] = aiHtmlContent;
+
+        // --- 2.4 E-Mail-Inhalt finalisieren ---
+        const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
+        let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
+        const finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders); // Fallback-Text
+
+        // Alle Anh?nge kombinieren
+        const finalAttachments = [
+          ...emailTemplate.attachments, // Anh?nge aus dem Entwurf
+          ...userAttachments             // Neue Anh?nge aus der Sidebar
+        ];
+
+        // PDF-Anhang-Logik (derzeit ignoriert, wie angewiesen)
+        if (formData.enablePdfAttachment) {
+           Logger.log(`Row ${sheetRowNumber}: 'enablePdfAttachment' is true, but this feature is currently ignored as requested.`);
+        }
+
+        // --- 2.5 Entwurf erstellen ---
+        const options = {
+          htmlBody: finalBodyHtml,
+          cc: ccRaw.replace(/;\s*/g, ',').trim() || undefined,
+          attachments: finalAttachments,
+          inlineImages: emailTemplate.inlineImages,
+          bcc: buildBccString_budget({
+            sharedInbox: formData.bccSharedInbox,
+            pop: formData.bccPop
+          })
+        };
+
+        GmailApp.createDraft(recipientRaw, finalSubject, finalBodyText, options);
+        results.succeeded.push({ row: sheetRowNumber, recipient: recipientRaw, details: `Draft saved successfully with AI content.` });
+
+      } catch (e) {
+        const errorMsg = e.message.substring(0, 200);
+        Logger.log(`Row ${sheetRowNumber}: ERROR processing for "${recipientRaw}": ${errorMsg}`);
+        if (e.message.includes("CID") || e.message.includes("Recipient") || e.message.includes("Ads API")) {
+          results.failedInput.push({ row: sheetRowNumber, recipient: recipientRaw, details: errorMsg });
+        } else {
+          results.failedProcessing.push({ row: sheetRowNumber, recipient: recipientRaw, details: errorMsg });
+        }
+      }
+    }); // --- END ROW ITERATION ---
+
+    Logger.log(`Budget processing complete. Summary: Succeeded: ${results.succeeded.length}, FailedInput: ${results.failedInput.length}, FailedProcessing: ${results.failedProcessing.length}`);
+    return results;
+
+  } catch (e) {
+    Logger.log(`FATAL ERROR in processEmailRequest (Budget AI): ${e.message} \n Stack: ${e.stack}`);
+    results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: `Script Error: ${e.message}` });
+    return results;
+  }
 }
 
-
 // ================================================================
-// INTEGRATED CUSTOM AND UTILITY FUNCTIONS
+// LOKALE HILFSFUNKTIONEN (E-Mail & Anh?nge)
 // ================================================================
 
-/**
- * Finds a unique Gmail draft matching the subject line and extracts its content.
- * (Integrated from 01-1_emails.gs)
+/** Konvertiert Base64-Dateidaten aus der Sidebar in Blobs */
+function convertBase64ToBlobs_(files) {
+  if (!files || files.length === 0) return [];
+  const blobs = [];
+  files.forEach(file => {
+    try {
+      const blob = Utilities.newBlob(
+        Utilities.base64Decode(file.base64data),
+        file.mimeType,
+        file.filename
+      );
+      blobs.push(blob);
+    } catch (e) {
+      Logger.log(`Error converting file "${file.filename}" from Base64: ${e.message}`);
+    }
+  });
+  return blobs;
+}
+
+/** Erstellt die BCC-Zeichenkette */
+function buildBccString_budget(toggles) {
+  const bccAddresses = [];
+  if (toggles.sharedInbox) bccAddresses.push('gcs-sharedinbox@google.com');
+  if (toggles.pop) bccAddresses.push('gcs-pop@google.com');
+  return bccAddresses.join(', ') || undefined;
+}
+
+/** Erstellt die Platzhalter-Map */
+function buildPlaceholderMap_budget(formData, sheet) {
+  const map = {};
+  if (Array.isArray(formData.placeholders)) {
+    formData.placeholders.forEach(ph => {
+      // Stellt sicher, dass der Platzhalter-Tag das Format {{name}} hat
+      if (ph.name && ph.col && ph.name.startsWith('{{') && ph.name.endsWith('}}')) {
+         map[ph.name] = columnLetterToIndex_(ph.col, sheet);
+      }
+    });
+  }
+  return map;
+}
+
+/** Extrahiert Platzhalterwerte aus einer Zeile */
+function extractPlaceholderValues_(rowData, placeholderMap) {
+  const values = {};
+  for (const name in placeholderMap) {
+    const index = placeholderMap[name];
+    if (index > -1 && index < rowData.length) {
+      values[name] = rowData[index]?.toString().trim() ?? "";
+    } else {
+      values[name] = ""; // Standard-Fallback, falls Spalte nicht existiert
+    }
+  }
+  return values;
+}
+
+/** * Holt die Gmail-Vorlage.
+ * HINWEIS: Diese Funktion ist eine Kopie von der in 01-1_emails.gs,
+ * um 04-1 eigenst?ndig zu machen. Zuk?nftige ?nderungen m?ssen evtl. an beiden Orten erfolgen.
  */
 function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
-  Logger.log(`Searching for Gmail draft with subject: "${subject_line}" (Require unique: ${requireUnique})`);
   if (!subject_line || subject_line.trim() === "") {
     throw new Error("Subject line for draft template cannot be empty.");
   }
@@ -245,396 +228,339 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
   const matchingDrafts = drafts.filter(d => d.getMessage().getSubject() === subject_line);
 
   if (matchingDrafts.length === 0) { throw new Error(`No Gmail draft found with subject: "${subject_line}"`); }
-  if (requireUnique && matchingDrafts.length > 1) { throw new Error(`Multiple Gmail drafts (${matchingDrafts.length}) found with subject: "${subject_line}". Please ensure only one draft has this exact subject.`); }
+  if (requireUnique && matchingDrafts.length > 1) { throw new Error(`Multiple Gmail drafts (${matchingDrafts.length}) found with subject: "${subject_line}".`); }
 
-  const draft = matchingDrafts[0];
-  const msg = draft.getMessage();
+  const msg = matchingDrafts[0].getMessage();
+  
   let attachments = [];
-  let inlineImages = [];
+  let inlineImages = {};
 
   try {
-    const regularAttachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
-    if (regularAttachments && regularAttachments.length > 0) {
-      attachments = regularAttachments.map(a => {
-        try { return a.copyBlob(); } catch (cbErr) { Logger.log(`Could not copy attachment blob "${a.getName()}": ${cbErr.message}`); return null; }
-      }).filter(b => b !== null);
-    }
-  } catch (e) {
+    attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
+  } catch(e) {
     Logger.log(`Could not get attachments for draft "${subject_line}": ${e.message}`);
   }
 
   try {
-    const rawInlineImages = msg.getAttachments({ includeInlineImages: true, includeAttachments: false });
-    if (rawInlineImages && rawInlineImages.length > 0) {
-      rawInlineImages.forEach(img => {
-        const headers = img.getHeaders();
-        const cidHeader = headers && headers['Content-ID'];
-        const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
-
-        if (cid) {
-          try { inlineImages[cid] = img.copyBlob(); } catch (cbErr) { Logger.log(`Could not copy inline image blob "${img.getName()}" (CID: ${cid}): ${cbErr.message}`);}
-        } else {
-          Logger.log(`Warning: Found inline image named "${img.getName()}" without a Content-ID in draft "${subject_line}". It might not display correctly if referenced by CID.`);
-        }
-      });
-    }
-  } catch (e) {
-    Logger.log(`Could not get inline images for draft "${subject_line}": ${e.message}`);
+    const rawInline = msg.getAttachments({ includeInlineImages: true, includeAttachments: false });
+    rawInline.forEach(img => {
+      const cidHeader = img.getHeaders()['Content-ID'];
+      const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
+      if (cid) {
+        inlineImages[cid] = img;
+      }
+    });
+  } catch(e) {
+     Logger.log(`Could not get inline images for draft "${subject_line}": ${e.message}`);
   }
 
-  Logger.log(`Template extracted. Subject: "${msg.getSubject()}", Attachments: ${attachments.length}, Inline Images: ${Object.keys(inlineImages).length}`);
   return {
-    message: {
-      text: msg.getPlainBody() || "",
-      html: msg.getBody() || ""
+    message: { 
+      text: msg.getPlainBody() || "", 
+      html: msg.getBody() || "" 
     },
     attachments: attachments,
     inlineImages: inlineImages
   };
 }
 
+
+// ================================================================
+// INTEGRIERTE AI-LOGIK (Refaktoriert aus 100-6_combined_test.gs)
+// ================================================================
+
+// --- 1. Konstanten & Abfragen (angepasst f?r dynamisches Datum) ---
+const AI_TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
+const AI_TYPES_IS_ELIGIBLE = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
+
+// WICHTIG: Verwendet jetzt 'DURING ${dateRangeString}' statt 'BETWEEN'
+const AI_Q0_CURRENCY = `SELECT customer.currency_code FROM customer`;
+
+const AI_Q1_FINANCIALS = `
+    SELECT
+      campaign.id, campaign.name, campaign.advertising_channel_type, campaign.bidding_strategy_type,
+      campaign.primary_status, campaign.primary_status_reasons,
+      campaign_budget.amount_micros, metrics.cost_micros, metrics.conversions, metrics.conversions_value,
+      metrics.clicks, metrics.impressions
+    FROM campaign
+    WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${AI_TYPES_ALL})
+    AND segments.date DURING %DATE_RANGE%
+  `;
+
+const AI_Q2_TARGETS = `
+    SELECT campaign.id, campaign.target_cpa.target_cpa_micros, campaign.target_roas.target_roas,
+    campaign.maximize_conversion_value.target_roas, campaign.maximize_conversions.target_cpa_micros
+    FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${AI_TYPES_ALL})
+  `;
+
+const AI_Q3_IS_METRICS = `
+    SELECT campaign.id, metrics.search_impression_share, metrics.search_budget_lost_impression_share,
+    metrics.search_rank_lost_impression_share
+    FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${AI_TYPES_IS_ELIGIBLE})
+    AND segments.date DURING %DATE_RANGE%
+  `;
+
+const AI_Q4_BUDGET_RECS = `
+    SELECT campaign.id, campaign_budget.has_recommended_budget, campaign_budget.recommended_budget_amount_micros,
+    campaign_budget.recommended_budget_estimated_change_weekly_cost_micros
+    FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.primary_status_reasons CONTAINS ANY ('BUDGET_CONSTRAINED')
+  `;
+
 /**
- * Converts a column letter (e.g., "A", "B", "AA") to its 0-based index for a given sheet.
+ * F?hrt die Abfrage aus. Ersetzt den Datumsbereich.
  */
-function columnLetterToIndex_(columnLetter, sheet) {
-  if (!columnLetter || typeof columnLetter !== 'string') { return -1; }
-  if (!sheet || typeof sheet.getMaxColumns !== 'function') { return -1; }
-  const letter = columnLetter.toUpperCase().trim();
-  if (letter.length === 0) { return -1; }
-
-  let column = 0;
-  for (let i = 0; i < letter.length; i++) {
-      const charCode = letter.charCodeAt(i);
-      if (charCode < 65 || charCode > 90) { return -1; }
-      column = column * 26 + (charCode - 64);
-  }
-  try {
-    const maxSheetCols = sheet.getMaxColumns();
-    if (column <= 0 || column > maxSheetCols) { return -1; }
-  } catch (e) { return -1; }
-  return column - 1;
-}
-
-/**
- * Retrieves all rows from a given sheet that have a specific trigger value ('1')
- * in the specified trigger column.
- */
-function getTriggeredRows_(sheet, triggerColIndex) {
-  if (!sheet || typeof sheet.getDataRange !== 'function') {
-    throw new Error("Invalid Sheet object provided to getTriggeredRows_.");
-  }
-  if (triggerColIndex < 0) {
-    throw new Error(`Invalid triggerColIndex (${triggerColIndex}) provided to getTriggeredRows_. Must be 0 or greater.`);
-  }
-
-  const allValues = sheet.getDataRange().getValues();
-  const triggeredRows = [];
-
-  if (allValues.length === 0) { return triggeredRows; }
-
-  for (let i = 0; i < allValues.length; i++) {
-    const currentRow = allValues[i];
-    if (triggerColIndex >= currentRow.length) { continue; }
-
-    const triggerValue = String(currentRow[triggerColIndex] || '').trim();
-
-    if (triggerValue === "1") {
-      triggeredRows.push({
-        rowNumber: i + 1, 
-        data: currentRow   
-      });
-    }
-  }
-  return triggeredRows;
-}
-
-/** Fills placeholders in a template string using a provided data map. */
-function fillPlaceholdersInString_(templateString, placeholderDataMap) {
-  // Uses escapeData_ logic integrated here
-  function escapeData_(value) {
-    if (value === null || value === undefined) return "";
-    if (value instanceof Date) { return value.toISOString(); }
-    let str = String(value);
-    return str
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n')
-        .replace(/\r/g, '\\r');
-  }
-
-  if (templateString === null || templateString === undefined) return "";
-  if (typeof templateString !== 'string') templateString = String(templateString);
-  if (!placeholderDataMap || typeof placeholderDataMap !== 'object') {
-      return templateString;
-  }
-  return templateString.replace(/\{\{([^{}]+?)\}\}/g, (matchWithBrackets) => {
-      // Keys in the map must match the full placeholder tag, e.g., {{ContactName}}
-      return placeholderDataMap.hasOwnProperty(matchWithBrackets) ?
-              escapeData_(placeholderDataMap[matchWithBrackets]) :
-              matchWithBrackets;
-  });
-}
-
-/** Executes GAQL query, replaces date placeholders, and calls InternalAdsApp.search. */
-function executeGAQLQuery(clientId, query, options = {}) {
+function executeAiQuery_(clientId, query, dateRangeString) {
   let finalQuery = query;
-  if (options.dateRange) {
-    finalQuery = finalQuery.replace(DATE_PLACEHOLDER_START, options.dateRange.startDateStr);
-    finalQuery = finalQuery.replace(DATE_PLACEHOLDER_END, options.dateRange.endDateStr);
+  if (dateRangeString) {
+    // Ersetzt %DATE_RANGE% durch den GAQL-String (z.B. LAST_7_DAYS)
+    finalQuery = query.replace('%DATE_RANGE%', dateRangeString);
   }
-  
-  const request = {
-    customerId: clientId,
-    query: finalQuery
-  };
-  
-  // This relies on InternalAdsApp.search being globally defined.
+  const request = { customerId: clientId, query: finalQuery };
   const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
-  return JSON.parse(responseJson);
-}
-
-/** Builds the BCC string from toggles. */
-function buildBccString_(toggles) {
-    const bccAddresses = [];
-    if (toggles.sharedInbox) bccAddresses.push('gcs-sharedinbox@google.com');
-    if (toggles.pop) bccAddresses.push('gcs-pop@google.com');
-    return bccAddresses.join(', ') || undefined;
+  return JSON.parse(responseJson).results || [];
 }
 
 /**
- * Determines the 7-day date range for segmented queries, excluding the current partial day.
- * (Pulls 7 full days ending yesterday.)
+ * Haupt-KI-Funktion, die die Analyse f?r eine CID und einen Datumsbereich durchf?hrt.
+ * @param {string} cidRaw Die rohe CID (z.B. 123-456-7890)
+ * @param {string} dateRangeString Der GAQL-Datumsstring (z.B. "LAST_7_DAYS")
+ * @param {number} reportDays Die Anzahl der Tage (z.B. 7)
+ * @return {string} Der von Gemini generierte HTML-String.
  */
-function get7DayDateRange_() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const timeZone = ss.getSpreadsheetTimeZone() || "Europe/Dublin"; 
-    
-    // 1. Set EndDate to Yesterday
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() - 1); 
-    
-    // 2. Set StartDate to 7 full days before Yesterday (i.e., 8 days ago)
-    const startDate = new Date(endDate.getTime());
-    startDate.setDate(endDate.getDate() - 6); 
-    
-    // Ensure both dates are formatted for GAQL
-    return {
-        startDateStr: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
-        endDateStr: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
-    };
-}
+function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
+  Logger.log(`AI Analysis started for CID ${cidRaw}, Range: ${dateRangeString} (${reportDays} days)`);
 
-/** Formats micros amount to currency string with ISO code. */
-function formatMicrosToCurrency(micros, currencyCode) {
-    if (micros === Infinity || !micros || isNaN(micros)) return '-';
-    const amount = (micros / 1000000).toFixed(2);
-    return `${currencyCode} ${amount}`;
-}
+  try {
+    const cidTrimmed = String(cidRaw).trim();
+    const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
+    if (!extIds || !extIds[cidTrimmed]) {
+        throw new Error(`(AI) CID Lookup Failed for ${cidRaw}`);
+    }
+    const apiCid = extIds[cidTrimmed].replace(/-/g, '');
 
-/** Builds the placeholder map from formData. */
-function buildPlaceholderMap_(formData, sheet) {
-    const map = {};
-    if (Array.isArray(formData.placeholders)) {
-      formData.placeholders.forEach(ph => {
-        if(ph.name && ph.col) map[ph.name] = columnLetterToIndex_(ph.col, sheet);
+    // 1. Alle Daten abrufen
+    const curRes = executeAiQuery_(apiCid, AI_Q0_CURRENCY, null);
+    const currency = curRes[0]?.customer?.currencyCode || 'EUR';
+
+    const resQ1 = executeAiQuery_(apiCid, AI_Q1_FINANCIALS, dateRangeString);
+    const campaigns = new Map();
+
+    // Basis-Map erstellen
+    resQ1.forEach(row => {
+      const reasons = row.campaign.primaryStatusReasons || [];
+      const isStatusLimited = reasons.includes('BUDGET_CONSTRAINED');
+      campaigns.set(row.campaign.id, {
+        name: row.campaign.name, type: row.campaign.advertisingChannelType,
+        strategy: row.campaign.biddingStrategyType,
+        budget: parseFloat(row.campaignBudget.amountMicros || 0) / 1000000,
+        cost: parseFloat(row.metrics.costMicros || 0) / 1000000,
+        conv: parseFloat(row.metrics.conversions || 0),
+        val: parseFloat(row.metrics.conversionsValue || 0),
+        clicks: parseFloat(row.metrics.clicks || 0),
+        impr: parseFloat(row.metrics.impressions || 0),
+        targetType: '-', targetVal: 0, isShare: 0, lostBudget: 0, lostRank: 0,
+        recAmount: 0, isLimited: isStatusLimited
       });
+    });
+
+    if (campaigns.size === 0) {
+       Logger.log("No active campaigns found for AI analysis in this date range.");
+       return "<ul><li>Keine aktiven Kampagnendaten im ausgew?hlten Zeitraum gefunden.</li></ul>";
     }
-    return map;
-}
 
-/** Extracts values from row based on map. */
-function extractPlaceholderValues_(rowData, placeholderMap) {
-    const values = {};
-    for(const name in placeholderMap) {
-        const index = placeholderMap[name];
-        values[name] = rowData[index]?.toString().trim() ?? "";
+    // Ziele zusammenf?hren
+    const resQ2 = executeAiQuery_(apiCid, AI_Q2_TARGETS, null);
+    resQ2.forEach(row => {
+      const c = campaigns.get(row.campaign.id);
+      if (c) {
+        let roas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
+        if (roas === 0) roas = parseFloat(row.campaign.maximizeConversionValue?.targetRoas || 0);
+        if (roas > 0) { c.targetType = 'ROAS'; c.targetVal = roas; }
+        let cpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0);
+        if (cpa === 0) cpa = parseFloat(row.campaign.maximizeConversions?.targetCpaMicros || 0);
+        if (cpa > 0) { c.targetType = 'CPA'; c.targetVal = cpa / 1000000; }
+      }
+    });
+
+    // IS-Metriken zusammenf?hren
+    const resQ3 = executeAiQuery_(apiCid, AI_Q3_IS_METRICS, dateRangeString);
+    resQ3.forEach(row => {
+      const c = campaigns.get(row.campaign.id);
+      if (c) {
+        c.isShare = parseFloat(row.metrics.searchImpressionShare || 0);
+        c.lostBudget = parseFloat(row.metrics.searchBudgetLostImpressionShare || 0);
+        c.lostRank = parseFloat(row.metrics.searchRankLostImpressionShare || 0);
+      }
+    });
+
+    // Empfehlungen zusammenf?hren
+    const resQ4 = executeAiQuery_(apiCid, AI_Q4_BUDGET_RECS, null);
+    resQ4.forEach(row => {
+      const c = campaigns.get(row.campaign.id);
+      if (c) {
+        c.isLimited = true;
+        if (row.campaignBudget.hasRecommendedBudget) {
+          c.recAmount = parseFloat(row.campaignBudget.recommendedBudgetAmountMicros || 0) / 1000000;
+        }
+      }
+    });
+
+    // --- 2. DATEN F?R KI VORBEREITEN ---
+    const campaignsToAnalyze = [];
+    campaigns.forEach(c => {
+      let depletion = 0;
+      // WICHTIG: Verwendet die dynamische 'reportDays'-Variable
+      if (c.budget > 0) depletion = ((c.cost / reportDays) / c.budget) * 100;
+
+      let targetStatus = "No Target";
+      if (c.targetType === 'ROAS') {
+        const actR = (c.cost > 0) ? (c.val / c.cost) : 0;
+        const rAct = Math.round((actR + Number.EPSILON) * 100) / 100;
+        const rTgt = Math.round((c.targetVal + Number.EPSILON) * 100) / 100;
+        targetStatus = (rAct >= rTgt) ? "Target Met" : "Target Missed";
+      } else if (c.targetType === 'CPA') {
+        const actC = (c.conv > 0) ? (c.cost / c.conv) : 0;
+        const rAct = Math.round((actC + Number.EPSILON) * 100) / 100;
+        const rTgt = Math.round((c.targetVal + Number.EPSILON) * 100) / 100;
+        targetStatus = (c.conv > 0 && rAct <= rTgt) ? "Target Met" : "Target Missed";
+      }
+
+      let missedConv = 0;
+      if (c.isShare > 0 && c.lostBudget > 0 && c.impr > 0 && c.clicks > 0) {
+        const totalImpr = c.impr / c.isShare;
+        const lostImpr = totalImpr * c.lostBudget;
+        const ctr = c.clicks / c.impr;
+        const convRate = (c.conv > 0) ? (c.conv / c.clicks) : 0;
+        missedConv = (lostImpr * ctr * convRate);
+      }
+
+      // Nur interessante Kampagnen an KI senden
+      if (c.isLimited || depletion > 85 || missedConv > 1) {
+        campaignsToAnalyze.push({
+          CampaignName: c.name, CampaignType: c.type,
+          Status: c.isLimited ? "Limited by Budget" : "Eligible",
+          CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
+          Depletion_Period: depletion.toFixed(1) + "%", // Umbenannt von Depletion7Day
+          TargetStatus: targetStatus,
+          MissedConversions_Est: missedConv > 0 ? missedConv.toFixed(1) : "None",
+          RecommendedBudget_API: c.recAmount > 0 ? `${currency} ${c.recAmount.toFixed(2)}` : "N/A",
+          LostIS_Budget: (c.lostBudget * 100).toFixed(1) + "%",
+          LostIS_Rank: (c.lostRank * 100).toFixed(1) + "%"
+        });
+      }
+    });
+
+    Logger.log(`Sending ${campaignsToAnalyze.length} campaigns to Gemini AI...`);
+
+    // --- 3. KI AUFRUFEN ---
+    if (campaignsToAnalyze.length > 0) {
+      const aiResponse = callGeminiAI_budget(campaignsToAnalyze); // Aufruf der lokalen KI-Funktion
+      return aiResponse;
+    } else {
+      Logger.log("No campaigns met the criteria for AI analysis.");
+      return "<ul><li>Alle Kampagnen laufen stabil. Keine unmittelbaren Budget-Anpassungen basierend auf den Kriterien (Limitierung, Auslastung >85% oder verpasste Conversions) erforderlich.</li></ul>";
     }
-    return values;
+
+  } catch (e) {
+    Logger.log(`FATAL ERROR in getAiBudgetAnalysis_ (CID: ${cidRaw}): ${e.message}`);
+    Logger.log(e.stack);
+    // Gib eine benutzerfreundliche Fehlermeldung zur?ck, die in die E-Mail eingef?gt werden kann
+    return `<ul><li><b>Fehler bei der KI-Analyse f?r CID ${cidRaw}:</b> ${e.message}</li></ul>`;
+  }
 }
 
-/** Merges all data sources and performs the complex budget/efficiency calculations. */
-function mergeAndCalculateData(perfData, targetData, recommendationData, currencyCode) {
-    const mergedMap = new Map();
+/**
+ * Ruft die Gemini-API auf (aus 100-6).
+ */
+function callGeminiAI_budget(campaignData) {
+  const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (!API_KEY) {
+      Logger.log("ERROR: 'GEMINI_API_KEY' missing in Script Properties.");
+      return "<ul><li><b>Fehler:</b> API-Schl?ssel f?r KI nicht konfiguriert.</li></ul>";
+  }
 
-    // 1. Aggregate Performance Data (Q1)
-    perfData.forEach(row => {
-        const campaignId = row.campaign.id;
-        if (!mergedMap.has(campaignId)) {
-            mergedMap.set(campaignId, { 
-                id: campaignId, 
-                name: row.campaign.name,
-                type: row.campaign.advertisingChannelType,
-                budgetMicros: parseFloat(row.campaignBudget.amountMicros || 0),
-                biddingType: row.campaign.biddingStrategyType,
-                currency: currencyCode,
-                costMicros: 0, conversions: 0, conversionsValue: 0, clicks: 0,
-                searchIS: 0, searchISLostBudget: 0, searchISLostRank: 0,
-                rowCount: 0 
-            });
-        }
-        
-        const campaign = mergedMap.get(campaignId);
-        campaign.costMicros += parseFloat(row.metrics.costMicros || 0);
-        campaign.conversions += parseFloat(row.metrics.conversions || 0);
-        campaign.conversionsValue += parseFloat(row.metrics.conversionsValue || 0);
-        campaign.clicks += parseFloat(row.metrics.clicks || 0);
-        
-        campaign.searchIS = parseFloat(row.metrics.searchImpressionShare || 0);
-        campaign.searchISLostBudget = parseFloat(row.metrics.searchImpressionShareLostBudget || 0);
-        campaign.searchISLostRank = parseFloat(row.metrics.searchImpressionShareLostRank || 0);
-    });
+  const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+  
+  // Note: Umlaute (?, ?, ?) wurden zur Sicherheit als ? (Fragezeichen) kodiert,
+  // dies sollte in einer Live-Umgebung korrekt als UTF-8 behandelt werden.
+  const prompt = `
+    DU BIST: Ein Senior Google Ads Daten-Analyst.
+    DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
+
+    INPUT DATEN:
+    ${JSON.stringify(campaignData, null, 2)}
+
+    TECHNISCHE FORMATIERUNG (WICHTIG F?R GMAIL):
+    1. Gib **ausschlie?lich** ein HTML-Fragment zur?ck (kein \`\`\`html Block, kein <body>).
+    2. Nutze eine ungeordnete Liste: <ul> f?r den Container, <li> f?r die Punkte.
+    3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
+    4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
+
+SPRACHREGELUNG (STRIKT):
+    1. **VERBOTENE WORTE (Niemals nutzen):** "Depletion", "Limited", "Budget Limited", "Missed", "Target Met", "Recommendation", "Efficiency Scale".
+    2. **PFLICHT-?BERSETZUNGEN:**
+       - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
+       - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
+       - "Target Met" -> "Ziel erreicht"
+       - "RecommendedBudget" -> "empfohlene Tagesbudget"
+       - "Depletion_Period" -> "Budget-Aussch?pfung" oder "Auslastung"
+    3. **AUSNAHME:** Das Wort "Conversion" oder "Conversions" darf (und soll) verwendet werden.
+
+    REGELN F?R DEN INHALT:
+    1. **Abwechslung:** Variiere den Satzbau. Vermeide es, jeden Punkt identisch zu beginnen ("Die Kampagne...").
+    2. **Keine Redundanz:** Schreibe NIEMALS "Wir verlieren entgangene Conversions". Das ist doppelt gemoppelt. 
+       - RICHTIG: "Uns entgehen rechnerisch ca. [X] Conversions" oder "Das ungenutzte Potenzial liegt bei [X] Conversions".
+    3. **Clustering:** Fasse Kampagnen mit gleicher Situation logisch zusammen.
+    4. **Tonalit?t:** Neutral, analytisch, l?sungsorientiert.
+
+    ANALYSE-PRIORIT?TEN:
     
-    // Convert to Array and add calculated fields
-    const finalCampaigns = Array.from(mergedMap.values()).map(c => {
-        // Calculations
-        c.CPA = c.conversions > 0 ? c.costMicros / c.conversions : Infinity;
-        c.ROAS = c.costMicros > 0 ? c.conversionsValue / c.costMicros : 0;
-        const totalDailyBudgetMicros = c.budgetMicros * 7;
-        c.budgetDepletion = totalDailyBudgetMicros > 0 ? c.costMicros / totalDailyBudgetMicros : 0;
-        
-        // Lost Conversions
-        if (c.type === 'SEARCH' || c.type === 'DISPLAY') {
-            const currentISDecimal = c.searchIS / 100;
-            const lostISBudgetDecimal = c.searchISLostBudget / 100;
-            c.estimatedLostConversions = (currentISDecimal > 0 && c.conversions > 0) ? 
-                c.conversions * (lostISBudgetDecimal / currentISDecimal) : 0;
-        } else {
-            c.estimatedLostConversions = 0;
-        }
-        
-        // Target/Recommendation Placeholders
-        c.targetCPA = null; c.targetROAS = null;
-        c.meetsTargetCPA = '-'; c.meetsTargetROAS = '-';
-        c.isBudgetLimited = 'Nein'; c.recommendedBudget = '-';
+    1. **Prio 1 (Effizienz-Skalierung):**
+       - Wenn: TargetStatus = "Target Met" UND (Status = "Limited by Budget" ODER Depletion_Period > 90%).
+       - Strategie: Betone, dass die Kampagne effizient l?uft, aber vom Budget limitiert wird. Nenne die "MissedConversions_Est" und den "LostIS_Budget". Schlage die Erh?hung auf das <b>[RecommendedBudget_API]</b> vor (falls "N/A", schlage eine schrittweise Erh?hung vor).
 
-        return c;
-    });
+    2. **Prio 2 (Wachstums-Potenzial):**
+       - Wenn: TargetStatus = "No Target" UND Status = "Limited by Budget".
+       - Strategie: Weise auf die starke Nachfrage hin, die das aktuelle Budget ?bersteigt. Empfiehl einen Test mit h?herem Budget, um das Volumen zu pr?fen.
 
-    // 2. Merge Target Data (Q2)
-    targetData.forEach(row => {
-        const campaign = finalCampaigns.find(c => c.id === row.campaign.id);
-        if (campaign) {
-            if (row.campaign.targetCpa) {
-                campaign.targetCPA = parseFloat(row.campaign.targetCpa.targetCpaMicros);
-                campaign.meetsTargetCPA = (campaign.targetCPA >= campaign.CPA) ? 'Ja' : 'Nein';
-            }
-            if (row.campaign.targetRoas) {
-                campaign.targetROAS = parseFloat(row.campaign.targetRoas.targetRoas);
-                campaign.meetsTargetROAS = (campaign.targetROAS <= campaign.ROAS) ? 'Ja' : 'Nein';
-            }
-        }
-    });
+    3. **Prio 3 (Kapazit?ts-Warnung):**
+       - Wenn: Depletion_Period > 85% (aber nicht "Limited by Budget").
+       - Strategie: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
 
-    // 3. Merge Recommendation Data (Q4)
-    recommendationData.forEach(row => {
-        const resourceParts = row.recommendation.campaign.split('~');
-        const campaignId = resourceParts.length > 1 ? resourceParts[1] : null;
-        
-        const campaign = finalCampaigns.find(c => c.id === campaignId);
-        
-        if (campaign && row.campaignBudgetRecommendation && row.campaignBudgetRecommendation.budgetOptions) {
-            campaign.isBudgetLimited = 'Ja';
-            
-            let minBudgetMicros = Infinity;
-            row.campaignBudgetRecommendation.budgetOptions.forEach(opt => {
-                const micros = parseFloat(opt.recommendedBudgetAmountMicros);
-                if (micros < minBudgetMicros) {
-                    minBudgetMicros = micros;
-                }
-            });
-            campaign.recommendedBudget = formatMicrosToCurrency(minBudgetMicros, campaign.currency);
-        }
-    });
-    
-    return finalCampaigns;
-}
+    BEISPIEL OUTPUT (Stil-Referenz):
+    <ul>
+    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, sto?en jedoch t?glich an ihr Limit. Aktuell entgehen uns hierdurch rechnerisch ca. 20 Conversions pro Woche (Anteil entgangener Impressionen aufgrund des Budgets: 52%). Um dieses Potenzial voll auszusch?pfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
+    <li>Bei <b>"Demand Gen"</b> sehen wir eine extrem hohe Nachfrage, die das Budget von <b>EUR 200.00</b> vollst?ndig auslastet. Eine Anpassung w?rde helfen, die Sichtbarkeit an starken Tagen zu sichern.</li>
+    </ul>
+  `;
 
-/** Generates the main HTML table for the draft body. */
-function generateBudgetTableHtml(campaignsData, currencyCode) {
-    if (campaignsData.length === 0) return 'Keine Kampagnen mit Budget-Einschr?nkung gefunden.';
+  const payload = {
+    contents: [{
+      parts: [{ text: prompt }]
+    }]
+  };
 
-    let html = `
-    <h3 style="color:#007bff;">Budget-Empfehlungen f?r Black Friday Readiness:</h3>
-    <table border="1" style="width:100%; border-collapse: collapse; font-size:12px;">
-    <thead>
-        <tr style="background-color:#f2f2f2;">
-            <th style="padding: 8px;">Kampagne</th>
-            <th style="padding: 8px;">Typ</th>
-            <th style="padding: 8px;">Budget-Empfehlung</th>
-            <th style="padding: 8px;">Entgang. Conversions (gesch.)</th>
-            <th style="padding: 8px;">Budget-Aussch?pfung (7 Tage)</th>
-            <th style="padding: 8px;">Ist CPA/ROAS im Ziel?</th>
-            <th style="padding: 8px;">Akt. CPA</th>
-            <th style="padding: 8px;">Akt. Wert</th>
-            <th style="padding: 8px;">Entgang. IS (Rang)</th>
-        </tr>
-    </thead>
-    <tbody>`;
+  try {
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
 
-    campaignsData.forEach(c => {
-        const isSearchOrDisplay = c.type === 'SEARCH' || c.type === 'DISPLAY';
-        
-        let meetsTargetStatus = '-';
-        if (c.meetsTargetCPA !== '-') meetsTargetStatus = `CPA: ${c.meetsTargetCPA}`;
-        else if (c.meetsTargetROAS !== '-') meetsTargetStatus = `ROAS: ${c.meetsTargetROAS}`;
-        
-        const meetsTargetColor = meetsTargetStatus.includes('Ja') ? 'green' : (meetsTargetStatus.includes('Nein') ? 'red' : 'initial');
+    const response = UrlFetchApp.fetch(ENDPOINT, options);
+    const json = JSON.parse(response.getContentText());
 
-        const lostConvValue = c.estimatedLostConversions > 0 ? 
-            c.estimatedLostConversions.toFixed(0) : '-';
-        
-        const currentCPA = c.CPA === Infinity ? '-' : formatMicrosToCurrency(c.CPA, currencyCode);
-
-        html += `
-        <tr>
-            <td style="padding: 8px;">${c.name}</td>
-            <td style="padding: 8px;">${c.type}</td>
-            <td style="padding: 8px; font-weight:bold; color: #2ecc71;">${c.recommendedBudget}</td>
-            <td style="padding: 8px;">${lostConvValue}</td>
-            <td style="padding: 8px;">${(c.budgetDepletion * 100).toFixed(0)}%</td>
-            <td style="padding: 8px; color:${meetsTargetColor};">${meetsTargetStatus}</td>
-            <td style="padding: 8px;">${currentCPA}</td>
-            <td style="padding: 8px;">${formatMicrosToCurrency(c.conversionsValue, currencyCode)}</td>
-            <td style="padding: 8px;">${isSearchOrDisplay ? c.searchISLostRank.toFixed(1) + '%' : '-'}</td>
-        </tr>`;
-    });
-
-    html += `
-    </tbody>
-    </table>`;
-
-    return html;
-}
-
-/** Generates the PDF blob from the campaigns data. */
-function createCampaignReportPdf(campaignsData, currencyCode, clientId) {
-    const reportHtml = generateBudgetTableHtml(campaignsData, currencyCode);
-
-    const pdfTitle = `Budget Report - ${clientId} - ${new Date().toLocaleDateString()}`;
-    const fullHtml = `
-      <html>
-        <head>
-          <title>${pdfTitle}</title>
-          <style>
-            body { font-family: sans-serif; margin: 20px; }
-            h1 { font-size: 18px; color: #3498db; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #ccc; padding: 10px; text-align: left; font-size: 10px; }
-            th { background-color: #f2f2f2; font-weight: bold; }
-            td:nth-child(3) { font-weight: bold; color: #2ecc71; }
-            td:nth-child(6) { font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <h1>Budget Recommendation Report for Client ${clientId}</h1>
-          ${reportHtml}
-        </body>
-      </html>
-    `;
-
-    const htmlBlob = Utilities.newBlob(fullHtml, MimeType.HTML, pdfTitle + '.html');
-    const pdfBlob = htmlBlob.getAs(MimeType.PDF);
-    pdfBlob.setName(pdfTitle.replace(/\s/g, '_') + '.pdf');
-    
-    return pdfBlob;
+    if (json.candidates && json.candidates.length > 0) {
+      let text = json.candidates[0].content.parts[0].text;
+      text = text.replace(/```html/g, "").replace(/```/g, "").trim();
+      return text;
+    } else {
+      Logger.log(`AI Error: ${JSON.stringify(json)}`);
+      return `<ul><li><b>Fehler:</b> Die KI hat keine g?ltige Antwort zur?ckgegeben.</li></ul>`;
+    }
+  } catch (e) {
+    Logger.log(`AI Connection Failed: ${e.message}`);
+    return `<ul><li><b>Fehler:</b> Verbindung zur KI-API fehlgeschlagen: ${e.message}</li></ul>`;
+  }
 }
