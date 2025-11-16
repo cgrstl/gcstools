@@ -1,16 +1,17 @@
 /**
- * Final Debug Function to verify GAQL data retrieval.
- * FIX: Splits Competitive queries by Campaign Type to avoid metric incompatibility.
- * FIX: Broadens Recommendation query to find the missing Demand Gen recommendation.
+ * Enhanced Debug Function to verify GAQL data retrieval.
+ * - Logs first 3 rows of Financials.
+ * - Pulls ALL Recommendation types to find the "missing" one.
  */
 function testGAQLPerformanceQuery() {
 
   // --- CONSTANTS ---
   const DATE_PLACEHOLDER_START = 'YYYY-MM-DD_START';
   const DATE_PLACEHOLDER_END = 'YYYY-MM-DD_END';
+  
   const QUERY_0_CURRENCY = `SELECT customer.currency_code FROM customer`;
 
-  // Q1: UNIVERSAL FINANCIALS (All Types) - working
+  // Q1: UNIVERSAL FINANCIALS
   const QUERY_1_FINANCIALS = `
     SELECT
       campaign.id,
@@ -28,64 +29,34 @@ function testGAQLPerformanceQuery() {
       AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
   `;
 
-  // Q3A: SEARCH IS (Search Only) - Supports Lost Budget/Rank
-  const QUERY_3A_SEARCH_IS = `
+  // Q3: COMPETITIVE (Search & PMax)
+  const QUERY_3_SEARCH_PMAX_IS = `
     SELECT
       campaign.id,
       campaign.name,
       metrics.search_impression_share,
       metrics.search_impression_share_lost_budget,
-      metrics.search_impression_share_lost_rank
+      metrics.search_impression_share_lost_rank,
+      segments.date
     FROM
       campaign
     WHERE
       campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type = 'SEARCH'
+      AND campaign.advertising_channel_type IN ('SEARCH', 'PERFORMANCE_MAX')
       AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
   `;
 
-  // Q3B: DISPLAY IS (Display Only) - Supports Content IS
-  const QUERY_3B_DISPLAY_IS = `
-    SELECT
-      campaign.id,
-      campaign.name,
-      metrics.content_impression_share,
-      metrics.content_budget_lost_impression_share,
-      metrics.content_rank_lost_impression_share
-    FROM
-      campaign
-    WHERE
-      campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type = 'DISPLAY'
-      AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
-  `;
-
-  // Q3C: PMAX IS (PMax Only) - Supports ONLY Search IS (No Lost Budget/Rank)
-  const QUERY_3C_PMAX_IS = `
-    SELECT
-      campaign.id,
-      campaign.name,
-      metrics.search_impression_share
-    FROM
-      campaign
-    WHERE
-      campaign.status = 'ENABLED' 
-      AND campaign.advertising_channel_type = 'PERFORMANCE_MAX'
-      AND segments.date BETWEEN '${DATE_PLACEHOLDER_START}' AND '${DATE_PLACEHOLDER_END}'
-  `;
-
-  // Q4: RECOMMENDATIONS (Broadened for Debugging)
-  // Removed 'WHERE type=CAMPAIGN_BUDGET' to see ALL recs and find the Demand Gen one
-  const QUERY_4_DEBUG_RECS = `
+  // Q4: ALL RECOMMENDATIONS (Broadened for Debugging)
+  // Removing the type filter to see EVERYTHING returned by the API
+  const QUERY_4_DEBUG_ALL_RECS = `
     SELECT
       recommendation.resource_name,
       recommendation.type,
       recommendation.campaign,
-      recommendation.impact,
       recommendation.campaign_budget_recommendation.budget_options
     FROM
       recommendation
-    LIMIT 50
+    LIMIT 100
   `;
 
   // --- HELPERS ---
@@ -145,37 +116,47 @@ function testGAQLPerformanceQuery() {
     const dateRange = getLocal7DayRange();
     Logger.log(`Date Range: ${dateRange.startDateStr} -> ${dateRange.endDateStr}`);
 
-    // 1. FINANCIALS
-    executeLocalQuery("Q1_FINANCIALS", apiCid, QUERY_1_FINANCIALS, dateRange);
-
-    // 2. COMPETITIVE (Split by Type)
-    const q3a = executeLocalQuery("Q3A_SEARCH_IS", apiCid, QUERY_3A_SEARCH_IS, dateRange);
-    if (q3a.length > 0) Logger.log(`> Sample Search IS: ${q3a[0].metrics.searchImpressionShare} | Lost Budget: ${q3a[0].metrics.searchImpressionShareLostBudget}`);
-
-    const q3b = executeLocalQuery("Q3B_DISPLAY_IS", apiCid, QUERY_3B_DISPLAY_IS, dateRange);
-    if (q3b.length > 0) Logger.log(`> Sample Display IS: ${q3b[0].metrics.contentImpressionShare}`);
-
-    const q3c = executeLocalQuery("Q3C_PMAX_IS", apiCid, QUERY_3C_PMAX_IS, dateRange);
-    if (q3c.length > 0) Logger.log(`> Sample PMax IS: ${q3c[0].metrics.searchImpressionShare}`);
-
-    // 3. RECOMMENDATIONS (Debug Mode)
-    const q4 = executeLocalQuery("Q4_ALL_RECS", apiCid, QUERY_4_DEBUG_RECS, null);
-    if (q4.length > 0) {
-        Logger.log("--- FOUND RECOMMENDATIONS ---");
-        q4.forEach(row => {
-            // Log every recommendation type found to identify the Demand Gen one
-            Logger.log(`Type: ${row.recommendation.type} | Campaign: ${row.recommendation.campaign}`);
-            if (row.recommendation.campaignBudgetRecommendation) {
-                Logger.log(`  >> IS BUDGET REC! Options: ${row.recommendation.campaignBudgetRecommendation.budgetOptions.length}`);
-            }
-        });
+    // 1. FINANCIALS (Detailed Log)
+    let q1 = executeLocalQuery("Q1_FINANCIALS", apiCid, QUERY_1_FINANCIALS, dateRange);
+    if (q1.length > 0) {
+       // LOGGING FIRST 3 ROWS AS REQUESTED
+       const count = Math.min(q1.length, 3);
+       for(let i=0; i<count; i++) {
+         const r = q1[i];
+         Logger.log(`> Row ${i+1}: [${r.campaign.advertisingChannelType}] "${r.campaign.name}" | Cost: ${r.metrics.costMicros} | Conv: ${r.metrics.conversions}`);
+       }
     } else {
-        Logger.log("No recommendations found via API.");
+       Logger.log(`> WARNING: 0 rows. No spend in date range.`);
     }
 
+    // 2. COMPETITIVE
+    let q3 = executeLocalQuery("Q3_SEARCH_PMAX_IS", apiCid, QUERY_3_SEARCH_PMAX_IS, dateRange);
+    if (q3.length === 0) {
+      Logger.log("> NOTE: 0 rows for IS. This is common if campaigns have low volume or are not Search/PMax.");
+    } else {
+      Logger.log(`> Sample IS: ${q3[0].metrics.searchImpressionShare}`);
+    }
+
+    // 3. RECOMMENDATIONS (ALL TYPES)
+    let q4 = executeLocalQuery("Q4_DEBUG_ALL_RECS", apiCid, QUERY_4_DEBUG_ALL_RECS, null);
+    
+    if (q4.length > 0) {
+       Logger.log(`> Found ${q4.length} total recommendations. Listing Types found:`);
+       q4.forEach((r, index) => {
+           // Log specific details to identify the missing one
+           let details = "";
+           if (r.recommendation.campaignBudgetRecommendation) {
+               details = ` (BUDGET REC! Options: ${r.recommendation.campaignBudgetRecommendation.budgetOptions.length})`;
+           }
+           Logger.log(`  #${index+1}: Type=${r.recommendation.type} | Campaign=${r.recommendation.campaign} ${details}`);
+       });
+    } else {
+       Logger.log(`> ABSOLUTELY NO recommendations found via API. If UI shows them, they might be 'Optimization Score' suggestions not exposed as 'Recommendations' or account-level opportunities.`);
+    }
+
+    Logger.log(`\n=== TEST COMPLETED ===`);
+
   } catch (e) {
-    Logger.log(`\nFATAL EXCEPTION: ${e.message}\n${e.stack}`);
+    Logger.log(`\nFATAL EXCEPTION: ${e.message}`);
   }
-  
-  Logger.log("\n=== DEBUG RUN COMPLETE ===");
 }
