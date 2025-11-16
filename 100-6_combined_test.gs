@@ -214,44 +214,52 @@ function testUnifiedCampaignReportWithAI() {
 }
 
 /**
- * Helper to call Gemini API using Script Property Key.
- * FIX: Uses 'gemini-2.5-flash' (Confirmed Available in Log).
+ * Helper to call Gemini API (German Strategist Persona - Advanced Logic).
+ * FIX: Uses 'gemini-2.5-flash' (Available Model).
+ * FIX: Complex Prompt with specific Data-Usage instructions.
  */
 function callGeminiAI_(campaignData) {
-  // 1. GET KEY FROM SCRIPT PROPERTIES
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
-  
-  if (!API_KEY) {
-      return "ERROR: 'GEMINI_API_KEY' not found in Script Properties.";
-  }
+  if (!API_KEY) return "ERROR: 'GEMINI_API_KEY' missing.";
 
-  // FIX: Updated to the available model from your log: 'gemini-2.5-flash'
+  // Use the model confirmed in your logs
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
   const prompt = `
-    You are a strategic Google Ads consultant. Review the campaign data below and write a persuasive email section for the client.
-    
-    DATA:
+    DU BIST: Ein Senior Google Ads Performance-Stratege.
+    DEINE AUFGABE: Analysiere die Kampagnendaten und erstelle eine hoch-?berzeugende, datengetriebene Budget-Empfehlung f?r einen Kunden auf Deutsch.
+
+    INPUT DATEN:
     ${JSON.stringify(campaignData, null, 2)}
 
-    LOGIC HIERARCHY (Evaluate each campaign in this order):
-    
-    1. **Tier 1 (The Slam Dunk):** IF (TargetStatus == "Target Met" AND Status == "Limited by Budget" AND Depletion > 85%)
-       THEN Pitch: "Efficiency is excellent and you are hitting targets, but the daily cap is choking performance. We are actively losing profitable conversions. Uncapping the budget is a low-risk way to immediately increase revenue."
-       (Must mention the RecommendedBudget amount).
+    ANALYSE-LOGIK (Nutze diese Datenpunkte f?r deine Argumentation):
+    1. **Efficiency Check:** "TargetStatus" (Werden Ziele wie ROAS/CPA erreicht?).
+    2. **Constraint Check:** "Status" (Limited) & "Depletion" (Wie nah am Limit?).
+    3. **Competitive Check:** "LostIS_Rank" (Verlieren wir, weil wir schlecht bieten?) vs. "LostIS_Budget" (Verlieren wir nur, weil das Budget leer ist?). 
+       -> *Hinweis: Niedriger Lost Rank + Hoher Lost Budget ist das st?rkste Signal f?r Skalierung!*
+    4. **Opportunity Check:** "MissedConversions" (Wie viel Gesch?ft entgeht uns konkret?).
 
-    2. **Tier 2 (The Growth Opportunity):** IF (TargetStatus == "No Target" AND Status == "Limited by Budget" AND MissedConversions > 5)
-       THEN Pitch: "Strong market demand is causing this campaign to hit its ceiling daily. We are missing approximately [MissedConversions] conversions per week. I recommend testing a budget increase to capture this high-intent traffic."
+    REGELN F?R DEN OUTPUT:
+    1. **Format:** Erstelle NUR eine Liste mit Bullet-Points (?). Keine Einleitung, keine Gru?formel.
+    2. **Clustering:** Fasse Kampagnen mit identischer Diagnose in einem Punkt zusammen.
+    3. **Argumentation:** Nutze die oben genannten Checks, um "Warum" zu erkl?ren.
+       - *Beispiel:* "Wir verlieren hier kaum Impressionen durch das Ranking (gute Gebote), aber massiv durch das Budget..."
 
-    3. **Tier 3 (The Hidden Scaler):** IF (Status != "Limited" AND LostIS_Rank > 30% AND TargetStatus == "Target Met")
-       THEN Pitch: "Performance is excellent, but we are being outbid in >30% of auctions. We have room to scale by raising our CPA/ROAS targets slightly to win more competitive placements."
+    PRIORIT?TS-HIERARCHIE (Arbeite diese Kategorien ab):
 
-    4. **Tier 4 (General Maintenance):** For all others. Pitch: "Campaign is stable. We will continue to monitor performance."
+    1. **"DIE SKALIERUNGS-GARANTIE" (Slam Dunk)**
+       - Bedingung: Target Met = JA **UND** (Status = Limited ODER Depletion > 90%).
+       - Argumentation: "Hier l?uft alles perfekt (Ziel erreicht, Ranking stark), aber das Budget w?rgt die Performance ab. Wir verlieren [X]% Impressionen rein durch das Budget und verpassen ca. [Y] Conversions. Eine Erh?hung auf [RecBudget] ist hier risikofrei und bringt sofortigen Umsatz."
 
-    FORMATTING:
-    - Use clear paragraphs.
-    - Group similar campaigns together (e.g. "For the Search and Shopping campaigns...").
-    - Keep it professional and concise.
+    2. **"DIE WACHSTUMS-CHANCE" (High Demand)**
+       - Bedingung: Target = "No Target" **UND** MissedConversions > 5.
+       - Argumentation: "Die Nachfrage ist extrem hoch und die Kampagne l?uft t?glich ins Limit. Obwohl kein festes CPA-Ziel gesetzt ist, sehen wir ein Potenzial von [Y] zus?tzlichen Conversions pro Woche. Wir empfehlen einen Test mit h?herem Budget, um diese Nachfrage abzusch?pfen."
+
+    3. **"DIE SICHERHEITS-WARNUNG" (Capacity)**
+       - Bedingung: Status = Eligible **ABER** Depletion > 85%.
+       - Argumentation: "Diese Kampagnen laufen stabil, kratzen aber an der Kapazit?tsgrenze ([X]% Auslastung). Um an starken Tagen (z.B. Wochenende/Feiertage) keine Sichtbarkeit zu verlieren, empfehlen wir einen Puffer."
+
+    WICHTIG: Nenne immer konkrete Zahlen (Betr?ge, %-Werte, Anzahl Conversions) aus den Daten, um die Aussage zu beweisen.
   `;
 
   const payload = {
