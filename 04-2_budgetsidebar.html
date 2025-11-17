@@ -166,12 +166,18 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     
     <label for="cidCol" class="required">Google Ads CID column</label>
     <select id="cidCol"></select>
-    <p class="info-note">Select the column containing the client's 10-digit Google Ads ID (e.g., <code>123-456-7890</code>). This ID is required to fetch performance data.</p>
+    <p class="info-note">Select the column containing the client's 10-digit Google Ads ID (e.g., <code>123-456-7890</code>).</p>
     
     <label for="recipientCol" class="required">Recipient email column</label>
     <select id="recipientCol"></select>
     <p class="info-note">If a cell contains multiple emails, separate them with a semicolon (e.g., <code>abc@example.com; def@example.com</code>).</p>
 
+    <label for="statusCol" class="required">Status column</label>
+    <select id="statusCol"></select>
+    <p class="info-note">
+      To process many accounts (e.g., >20) without timing out, this script runs in batches. This column is used to track the status (e.g., "Draft Saved") for each row. Please select an empty column.
+    </p>
+    
     <label for="subjectLine" class="required">Subject line of Gmail draft</label>
     <input type="text" id="subjectLine" placeholder="Enter exact draft subject line">
     <p class="info-note">First, create an email draft in your Gmail 'Drafts' folder. Enter the <strong>exact subject line</strong> of that draft here. The script will use its body as the template.</p>
@@ -190,14 +196,12 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     </div>
   </div>
 
-  <!-- UPDATED: Section Renamed and Date Range Added -->
   <div class="form-group optional-group">
     <h3>Report Configuration</h3>
     <p class="info-note placeholder-note"> 
         Configure data generation options for the email content and attachments.
     </p>
 
-    <!-- NEW: Date Range Dropdown -->
     <div class="lookback-group">
       <label for="dateRange" class="required">Date Range</label>
       <select id="dateRange" required>
@@ -206,10 +210,8 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
         <option value="LAST_14_DAYS">Last 14 Days</option>
         <option value="LAST_30_DAYS">Last 30 Days</option>
       </select>
-      <!-- <p class="info-note">Select the time period for the campaign performance data.</p> --> <!-- REMOVED -->
     </div>
     
-    <!-- EXISTING: PDF Toggle -->
     <div id="pdfAttachmentGroup" style="margin-bottom: 15px;"> 
         <div style="display: flex; align-items: center;">
             <input type="checkbox" id="enablePdfAttachment">
@@ -222,7 +224,6 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     <h3>Placeholders</h3>
     <p class="info-note">Define placeholders like <code>{{ContactName}}</code> to personalize your email. Enter the tag below and select the corresponding column. Note: Dynamic data blocks for budget data will be inserted using specific placeholders in your draft (e.g., <code>[BUDGET_TABLE]</code>).</p>
     
-    <!-- Placeholder 1-5 controls (unchanged) -->
     <div id="placeholder1Group" class="placeholder-group inactive">
         <div class="placeholder-activation">
             <input type="checkbox" id="activatePlaceholder1"><label for="activatePlaceholder1" class="inline-label">Activate Placeholder 1</label>
@@ -280,18 +281,15 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     </div>
   </div>
   
-  <!-- NEW: File Attachment Section -->
   <div class="form-group optional-group">
     <h3>Attach File(s) to Email draft</h3>
     <p class="info-note">You can attach additional files (e.g., reports, images) to the email draft. Files are uploaded when you click "Start drafting".</p>
     
-    <!-- Styled file input -->
     <div id="dropZone" class="drop-zone">
       <input type="file" id="fileInput" multiple>
       <p id="dropZoneText">Drag & drop files here, or click to select</p>
     </div>
-    <ul id="fileList"></ul> <!-- To show selected files -->
-  </div>
+    <ul id="fileList"></ul> </div>
   
   <div class="button-container">
     <button id="draftButton" class="draft-button">Start drafting</button>
@@ -335,65 +333,49 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   
   const cidCol = document.getElementById('cidCol');
   const bccPopCheckbox = document.getElementById('enableBccPop');
-  const enablePdfAttachmentCheckbox = document.getElementById('enablePdfAttachment'); // This ID already existed
+  const enablePdfAttachmentCheckbox = document.getElementById('enablePdfAttachment');
+
+  // NEU: statusCol Referenz
+  const statusCol = document.getElementById('statusCol');
 
   const phCheckboxes = [1, 2, 3, 4, 5].map(i => document.getElementById(`activatePlaceholder${i}`));
   const phControls = [1, 2, 3, 4, 5].map(i => ({ group: document.getElementById(`placeholder${i}Group`), colSelect: document.getElementById(`placeholder${i}Col`), nameInput: document.getElementById(`placeholder${i}Name`) }));
   const bccSharedInboxCheckbox = document.getElementById('enableBccSharedInbox');
 
-  // --- NEW: File Handling Functions ---
-
-  /** Handles the file list from input or drop */
+  // --- NEW: File Handling Functions (Unchanged) ---
   function handleFiles(files) {
     if (statusMessage) { statusMessage.textContent = ''; }
-    
     for (const file of files) {
-      // Check if file with same name already exists
       if (attachedFiles.some(f => f.filename === file.name)) {
         if(statusMessage) { statusMessage.textContent = `File "${file.name}" is already added.`; statusMessage.className = 'status-error'; }
         continue;
       }
-      
       const fileId = "file_" + Date.now() + "_" + Math.random();
-      attachedFiles.push({
-        id: fileId,
-        filename: file.name,
-        mimeType: file.type || 'application/octet-stream',
-        base64data: null // Not yet loaded
-      });
-      updateFileList(); // Show "loading"
-      
+      attachedFiles.push({ id: fileId, filename: file.name, mimeType: file.type || 'application/octet-stream', base64data: null });
+      updateFileList();
       readFileAsBase64(file, fileId);
     }
   }
-  
-  /** Reads a file and stores its Base64 data */
   function readFileAsBase64(file, fileId) {
     const reader = new FileReader();
     reader.onload = (e) => {
-      const base64String = e.target.result.split(',')[1]; // Get only the Base64 part
+      const base64String = e.target.result.split(',')[1];
       const fileIndex = attachedFiles.findIndex(f => f.id === fileId);
-      if (fileIndex > -1) {
-        attachedFiles[fileIndex].base64data = base64String;
-      }
-      updateFileList(); // Update to remove "loading"
+      if (fileIndex > -1) { attachedFiles[fileIndex].base64data = base64String; }
+      updateFileList();
     };
     reader.onerror = (e) => {
       console.error("FileReader error:", e);
-      // Remove the failed file
       attachedFiles = attachedFiles.filter(f => f.id !== fileId);
       updateFileList();
       if(statusMessage) { statusMessage.textContent = `Error reading file "${file.name}".`; statusMessage.className = 'status-error'; }
     };
     reader.readAsDataURL(file);
   }
-  
-  /** Updates the visual file list UI */
   function updateFileList() {
     const fileListEl = document.getElementById('fileList');
     if (!fileListEl) return;
     fileListEl.innerHTML = '';
-    
     attachedFiles.forEach(file => {
       const li = document.createElement('li');
       const isLoading = file.base64data === null;
@@ -402,19 +384,16 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
         <button data-fileid="${file.id}">&times;</button>
       `;
       li.querySelector('button').addEventListener('click', (e) => {
-        e.stopPropagation(); // Prevent dropzone click
+        e.stopPropagation();
         removeFile(file.id);
       });
       fileListEl.appendChild(li);
     });
   }
-  
-  /** Removes a file from the list */
   function removeFile(fileId) {
     attachedFiles = attachedFiles.filter(f => f.id !== fileId);
     updateFileList();
   }
-
   // --- End File Handling Functions ---
 
 
@@ -452,8 +431,6 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       if (formContent) formContent.style.display = 'block';
       if (draftButton) draftButton.disabled = false;
       currentResults = null;
-      
-      // NEW: Clear file list on form reset
       attachedFiles = [];
       updateFileList();
   }
@@ -462,13 +439,12 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   function handleButtonClick(actionType) {
     if(statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
     
-    // NEW: Check if any files are still loading
     if (attachedFiles.some(f => f.base64data === null)) {
       if(statusMessage) {
         statusMessage.innerHTML = 'Error:<br>Files are still uploading. Please wait.';
         statusMessage.className = 'status-error';
       }
-      return; // Stop submission
+      return;
     }
     
     // GATHER ALL FORM DATA
@@ -476,19 +452,18 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       executionCol: document.getElementById('executionCol').value,
       cidCol: cidCol.value, 
       recipientCol: document.getElementById('recipientCol').value,
+      
+      // NEU: statusCol hinzugef?gt
+      statusCol: statusCol.value,
+
       ccCol: document.getElementById('ccCol').value,
       subjectLine: document.getElementById('subjectLine').value.trim(),
       bccSharedInbox: bccSharedInboxCheckbox.checked,
       bccPop: bccPopCheckbox.checked, 
-      
-      // NEW/UPDATED FIELDS
-      dateRange: document.getElementById('dateRange').value, // From new dropdown
+      dateRange: document.getElementById('dateRange').value,
       enablePdfAttachment: enablePdfAttachmentCheckbox.checked, 
-      
-      actionType: 'draft', // Forced to draft
+      actionType: 'draft',
       placeholders: [],
-      
-      // NEW: Add processed files
       attachedFiles: attachedFiles.map(f => ({
         filename: f.filename,
         mimeType: f.mimeType,
@@ -501,11 +476,13 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 
     // Validation: Core Fields 
     if (!formData.executionCol) { errorMessages.push('Select Trigger column.'); }
-    if (!formData.cidCol) { errorMessages.push('Select Google Ads CID column (required for data retrieval).'); } 
+    if (!formData.cidCol) { errorMessages.push('Select Google Ads CID column.'); } 
     if (!formData.recipientCol) { errorMessages.push('Select Recipient email column.'); }
-    if (!formData.subjectLine) { errorMessages.push('Enter Subject line (must match Gmail draft).'); }
     
-    // NEW: Validation for Date Range
+    // NEU: Validierung f?r statusCol
+    if (!formData.statusCol) { errorMessages.push('Select a Status column.'); }
+
+    if (!formData.subjectLine) { errorMessages.push('Enter Subject line (must match Gmail draft).'); }
     if (!formData.dateRange) { errorMessages.push('Select a Date Range.'); }
 
     // Validation: Placeholders (Retained)
@@ -515,24 +492,23 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
             const controls = phControls[index];
             const colVal = controls.colSelect.value;
             const nameVal = controls.nameInput.value.trim();
-
             if (!colVal) errorMessages.push(`Placeholder ${num} is active, please select its Column.`);
             if (!nameVal) errorMessages.push(`Placeholder ${num} is active, please enter its Placeholder Tag.`);
             else if (!(nameVal.startsWith('{{') && nameVal.endsWith('}}') && nameVal.length > 4)) {
                 errorMessages.push(`Placeholder ${num} Tag ('${nameVal}') must be in {{PlaceholderName}} format.`);
             }
-
             formData.placeholders.push({ col: colVal, name: nameVal });
             if (colVal) activePlaceholdersColumns.push(colVal);
         }
     });
 
-    // Validation: Duplicate Columns 
+    // Validation: Duplicate Columns (UPDATED)
     const columnsToCheck = [ 
         formData.executionCol, 
         formData.cidCol, 
         formData.recipientCol, 
-        formData.ccCol, 
+        formData.ccCol,
+        formData.statusCol, // NEU
         ...activePlaceholdersColumns 
     ];
     const validSelectedColumns = columnsToCheck.filter(col => col && col !== "");
@@ -553,7 +529,10 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     if(formContent) formContent.style.display = 'none';
     if(resultsView) resultsView.style.display = 'none';
     if(loadingState) loadingState.style.display = 'block';
-    if(loadingActionText) loadingActionText.textContent = 'Saving drafts...'; 
+    
+    // MODIFIED: Bessere Benachrichtigung f?r Batch-Verarbeitung
+    if(loadingActionText) loadingActionText.textContent = 'Starting batch process...'; 
+    
     if (draftButton) draftButton.disabled = true;
 
     // Call backend
@@ -563,29 +542,40 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
         .processEmailRequest(formData); 
   }
 
-  // onSuccess and onFailure callbacks (Retained)
+  // onSuccess and onFailure callbacks (UPDATED)
   function onSuccess(resultObject) { 
     console.log("onSuccess received:", resultObject);
     if(loadingState) loadingState.style.display = 'none';
 
-    if (!resultObject || typeof resultObject.processedRowCount === 'undefined' || !Array.isArray(resultObject.succeeded)) {
+    if (!resultObject || !resultObject.status) { // Angepasst an neues Batch-Result-Objekt
         console.error("Invalid result object structure received from server:", resultObject);
         onFailure(new Error("Received invalid data structure from server.")); return;
     }
     currentResults = resultObject;
 
-    const actionVerbPast = resultObject.actionType === 'send' ? 'sent' : 'saved as draft';
-    const actionVerbPresent = resultObject.actionType === 'send' ? 'Send' : 'Save Draft';
+    const actionVerbPast = 'saved as draft'; // Festgelegt auf 'draft'
 
-    if(resultsTitle) resultsTitle.textContent = `${actionVerbPresent} Process Complete`;
-    if(processedCountMessage) processedCountMessage.textContent = `Attempted to ${resultObject.actionType} emails for ${resultObject.processedRowCount} triggered row(s). See report below.`;
+    // MODIFIED: Bessere Benachrichtigung f?r Batch-Verarbeitung
+    if (resultObject.status === 'BATCH_RUNNING') {
+        resultsTitle.textContent = `Batch Processing Started...`;
+        processedCountMessage.textContent = `Processed ${resultObject.succeeded.length} row(s) in this batch. The script will automatically continue in the background. You can close this window.`;
+        if(draftButton) draftButton.disabled = true;
+        if(runAgainButton) runAgainButton.textContent = 'Close'; // Knopf-Text ?ndern
+        if(closeButton) closeButton.style.display = 'none'; // Zweiten Knopf ausblenden
+    } else { // Status ist 'BATCH_COMPLETE' oder 'ERROR'
+        resultsTitle.textContent = `Batch Process Complete`;
+        processedCountMessage.textContent = `Processed ${resultObject.processedRowCount} total row(s). See full report below.`;
+        if(runAgainButton) runAgainButton.textContent = 'Configure new batch';
+        if(closeButton) closeButton.style.display = 'inline-block';
+    }
+
 
     // --- Build Categorized Report ---
     if(errorList) errorList.innerHTML = '';
     const ul = document.createElement('ul');
     let reportHasContent = false;
     const addReportItems = (category, items, cssClass) => {
-          if (items.length > 0) {
+          if (items && items.length > 0) { // Pr?fen ob Array existiert
               reportHasContent = true;
               const categoryHeader = document.createElement('div');
               categoryHeader.className = 'report-category';
@@ -603,12 +593,15 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     addReportItems(`Successfully ${actionVerbPast}`, resultObject.succeeded, 'success');
     addReportItems('Failed (Input Data Issue)', resultObject.failedInput, 'fail-input');
     addReportItems('Failed (Processing Issue)', resultObject.failedProcessing, 'fail-process');
+    // NEU: Zeige an, was ?bersprungen wurde
+    addReportItems('Skipped (Already Processed)', resultObject.skipped, 'skip-process');
+
 
     if (reportHasContent) {
          errorList.appendChild(ul);
          if(errorReportSection) errorReportSection.style.display = 'block';
     } else {
-        if(errorReportSection) errorReportSection.style.display = 'none';
+         if(errorReportSection) errorReportSection.style.display = 'none';
     }
     // --- End Report Building ---
 
@@ -624,50 +617,39 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   // --- Initial Setup (UPDATED) ---
   document.addEventListener('DOMContentLoaded', (event) => {
       try {
-          // Populate dropdowns 
-          ['executionCol', 'cidCol', 'recipientCol'].forEach(id => populateDropdown(id, false));
+          // Populate dropdowns (NEU: statusCol hinzugef?gt)
+          ['executionCol', 'cidCol', 'recipientCol', 'statusCol'].forEach(id => populateDropdown(id, false));
           populateDropdown('ccCol', true);
           [1, 2, 3, 4, 5].forEach(i => populateDropdown(`placeholder${i}Col`, true));
 
           // Add Event Listeners 
           if (draftButton) draftButton.addEventListener('click', () => handleButtonClick('draft'));
           if (closeButton) closeButton.addEventListener('click', () => google.script.host.close());
-          if (runAgainButton) runAgainButton.addEventListener('click', showFormView);
+          if (runAgainButton) runAgainButton.addEventListener('click', () => {
+              if (runAgainButton.textContent === 'Close') {
+                  google.script.host.close();
+              } else {
+                  showFormView();
+              }
+          });
           phCheckboxes.forEach(checkbox => { if (checkbox) checkbox.addEventListener('change', updatePlaceholderStates); });
           
-          // NEW: Event Listeners for File Drop Zone
+          // NEW: Event Listeners for File Drop Zone (Unchanged)
           const dropZone = document.getElementById('dropZone');
           const fileInput = document.getElementById('fileInput');
-
           if (dropZone && fileInput) {
-            // Click to open file dialog
             dropZone.addEventListener('click', (e) => {
-                if(e.target.id !== 'fileInput') {
-                  fileInput.click();
-                }
+                if(e.target.id !== 'fileInput') { fileInput.click(); }
             });
-            
-            // Drag events
-            dropZone.addEventListener('dragover', (e) => {
-              e.preventDefault();
-              dropZone.classList.add('drag-over');
-            });
-            dropZone.addEventListener('dragleave', () => {
-              dropZone.classList.remove('drag-over');
-            });
+            dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+            dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('drag-over'); });
             dropZone.addEventListener('drop', (e) => {
               e.preventDefault();
               dropZone.classList.remove('drag-over');
-              if (e.dataTransfer.files) {
-                handleFiles(e.dataTransfer.files);
-              }
+              if (e.dataTransfer.files) { handleFiles(e.dataTransfer.files); }
             });
-            
-            // File input change
             fileInput.addEventListener('change', (e) => {
-              if (e.target.files) {
-                handleFiles(e.target.files);
-              }
+              if (e.target.files) { handleFiles(e.target.files); }
             });
           }
           
