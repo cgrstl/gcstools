@@ -1,19 +1,27 @@
 /**
  * 100-6: Unified Campaign Performance & AI Pitch Generation.
- * - Fetches & Calculates all metrics (Financials, Targets, IS, Budget Recs).
- * - Sends structured data to Gemini AI using the Secure Property Key.
- * - Generates a "Pitch-Perfect" recommendation log using AI.
+ * - Fetches & Calculates all metrics.
+ * - Strict Logic: No Missed Conv calculation for Video/Display/DemandGen.
+ * - Strict Logic: No Missed Conv calculation for Search/Pmax/Shopping if Conv = 0.
  */
 function testUnifiedCampaignReportWithAI() {
   
-  const TEST_CID_RAW = '6662487282'; 
+  const TEST_CID_RAW = '23975488'; 
   const REPORT_DAYS = 7;
 
   // --- CONSTANTS ---
   const DATE_START = 'YYYY-MM-DD_START';
   const DATE_END = 'YYYY-MM-DD_END';
+  
+  // Alle Typen f?r den Financial Abruf
   const TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
-  const TYPES_IS_ELIGIBLE = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
+  
+  // Nur diese Typen d?rfen IS-Metriken haben und Missed Conversions berechnen
+  // Video, Display, Demand Gen sind hier explizit NICHT enthalten.
+  const TYPES_FOR_CALCULATION = ['SEARCH', 'PERFORMANCE_MAX', 'SHOPPING']; 
+  
+  // SQL Filter f?r IS Abruf
+  const TYPES_IS_QUERY = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
 
   Logger.log(`\n=== STARTING AI PITCH TEST (CID: ${TEST_CID_RAW}) ===`);
 
@@ -40,7 +48,7 @@ function testUnifiedCampaignReportWithAI() {
     return JSON.parse(responseJson).results || [];
   };
 
-  // --- QUERIES (Standard 100-6 Set) ---
+  // --- QUERIES ---
   const Q0_CURRENCY = `SELECT customer.currency_code FROM customer`;
 
   const Q1_FINANCIALS = `
@@ -63,7 +71,7 @@ function testUnifiedCampaignReportWithAI() {
   const Q3_IS_METRICS = `
     SELECT campaign.id, metrics.search_impression_share, metrics.search_budget_lost_impression_share,
     metrics.search_rank_lost_impression_share
-    FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${TYPES_IS_ELIGIBLE})
+    FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${TYPES_IS_QUERY})
     AND segments.date BETWEEN '${DATE_START}' AND '${DATE_END}'
   `;
 
@@ -152,34 +160,72 @@ function testUnifiedCampaignReportWithAI() {
     const campaignsToAnalyze = [];
 
     campaigns.forEach(c => {
-        // Calculate Stats
+        
+        // --- STRICT LOGIC GATES ---
+        
+        // 1. Check Campaign Type (Whitelist: Search, PMax, Shopping ONLY)
+        // This automatically excludes Video, Display, Demand Gen from Calculations
+        const isEligibleType = TYPES_FOR_CALCULATION.includes(c.type);
+        
+        // 2. Check Data Integrity (Must have conversions to calc missed opps)
+        const hasConvData = c.conv > 0;
+
+        // --- CALCULATIONS ---
         let depletion = 0;
         if (c.budget > 0) depletion = ((c.cost / REPORT_DAYS) / c.budget) * 100;
 
+        // Target Status Logic
         let targetStatus = "No Target";
-        if (c.targetType === 'ROAS') {
-             const actR = (c.cost > 0) ? (c.val / c.cost) : 0;
-             const rAct = Math.round((actR + Number.EPSILON) * 100) / 100;
-             const rTgt = Math.round((c.targetVal + Number.EPSILON) * 100) / 100;
-             targetStatus = (rAct >= rTgt) ? "Target Met" : "Target Missed";
-        } else if (c.targetType === 'CPA') {
-             const actC = (c.conv > 0) ? (c.cost / c.conv) : 0;
-             const rAct = Math.round((actC + Number.EPSILON) * 100) / 100;
-             const rTgt = Math.round((c.targetVal + Number.EPSILON) * 100) / 100;
-             targetStatus = (c.conv > 0 && rAct <= rTgt) ? "Target Met" : "Target Missed";
+        // Logic: If no conversions, we can't honestly say "Target Missed" for CPA/ROAS.
+        if (!hasConvData && (c.targetType === 'ROAS' || c.targetType === 'CPA')) {
+            targetStatus = "-";
+        } else {
+            if (c.targetType === 'ROAS') {
+                 const actR = (c.cost > 0) ? (c.val / c.cost) : 0;
+                 targetStatus = (actR >= c.targetVal) ? "Target Met" : "Target Missed";
+            } else if (c.targetType === 'CPA') {
+                 const actC = (c.conv > 0) ? (c.cost / c.conv) : 0;
+                 targetStatus = (actC <= c.targetVal) ? "Target Met" : "Target Missed";
+            }
         }
 
-        let missedConv = 0;
-        if (c.isShare > 0 && c.lostBudget > 0 && c.impr > 0 && c.clicks > 0) {
+        // Missed Conversions Logic (STRICT)
+        let missedConvStr = "-";
+        let numericMissed = 0; // For AI trigger logic only
+        
+        // HARD CHECK: 
+        // 1. Must be Eligible Type (No Video/Display) 
+        // 2. AND Must have conversions (No Div/0)
+        // 3. AND Must have IS Lost Budget > 0
+        if (isEligibleType && hasConvData && c.isShare > 0 && c.lostBudget > 0 && c.impr > 0 && c.clicks > 0) {
              const totalImpr = c.impr / c.isShare;
              const lostImpr = totalImpr * c.lostBudget;
              const ctr = c.clicks / c.impr;
-             const convRate = (c.conv > 0) ? (c.conv / c.clicks) : 0;
-             missedConv = (lostImpr * ctr * convRate);
+             const convRate = c.conv / c.clicks; 
+             
+             const calcMissed = (lostImpr * ctr * convRate);
+             numericMissed = calcMissed;
+             missedConvStr = calcMissed.toFixed(1);
         }
 
-        // Only send interesting campaigns to AI
-        if (c.isLimited || depletion > 85 || missedConv > 1) {
+        // Rec Budget Logic
+        let recBudgetStr = "N/A";
+        if (c.isLimited) {
+            if (c.recAmount > 0) {
+                recBudgetStr = `${currency} ${c.recAmount.toFixed(2)}`;
+            } else {
+                recBudgetStr = "Check in Google Ads";
+            }
+        }
+
+        // IS Metrics Strings
+        // If type is not eligible (e.g. Video), we force "-" even if API returned something weird
+        const impressionShareStr = isEligibleType ? (c.isShare * 100).toFixed(1) + "%" : "-";
+        const lostIsBudgetStr = isEligibleType ? (c.lostBudget * 100).toFixed(1) + "%" : "-";
+        const lostIsRankStr = isEligibleType ? (c.lostRank * 100).toFixed(1) + "%" : "-";
+
+        // --- FILTER FOR AI ---
+        if (c.isLimited || depletion > 85 || numericMissed > 1) {
             campaignsToAnalyze.push({
                 CampaignName: c.name,
                 CampaignType: c.type,
@@ -187,11 +233,11 @@ function testUnifiedCampaignReportWithAI() {
                 CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
                 Depletion7Day: depletion.toFixed(1) + "%",
                 TargetStatus: targetStatus,
-                MissedConversions_Est: missedConv > 0 ? missedConv.toFixed(1) : "None",
-                RecommendedBudget_API: c.recAmount > 0 ? `${currency} ${c.recAmount.toFixed(2)}` : "N/A",
-                // Metrics for Logic
-                LostIS_Budget: (c.lostBudget * 100).toFixed(1) + "%",
-                LostIS_Rank: (c.lostRank * 100).toFixed(1) + "%"
+                ImpressionShare: impressionShareStr, 
+                LostIS_Budget: lostIsBudgetStr,
+                LostIS_Rank: lostIsRankStr,
+                MissedConversions_Est: missedConvStr,
+                RecommendedBudget_API: recBudgetStr
             });
         }
     });
@@ -201,10 +247,8 @@ function testUnifiedCampaignReportWithAI() {
     // --- 3. CALL AI ---
     if (campaignsToAnalyze.length > 0) {
         
-        // >>>>>>>>> MODIFICATION: DETAILED JSON LOGGER <<<<<<<<<<
         Logger.log("\n=== DATA SENT TO AI (JSON) ===");
         Logger.log(JSON.stringify(campaignsToAnalyze, null, 2)); 
-        // >>>>>>>>> END MODIFICATION <<<<<<<<<<
 
         const aiResponse = callGeminiAI_(campaignsToAnalyze);
         Logger.log("\n=== GEMINI RECOMMENDATION ===\n");
@@ -220,10 +264,7 @@ function testUnifiedCampaignReportWithAI() {
 }
 
 /**
- * Helper to call Gemini API (German Analyst Persona).
- * FIX: Generates clean HTML (ul/li) compatible with Gmail formatting.
- * FIX: Removes Markdown, uses HTML tags for bolding.
- * FIX: Prevents redundancy ("Wir verlieren entgangene...").
+ * Helper to call Gemini API.
  */
 function callGeminiAI_(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
@@ -231,7 +272,6 @@ function callGeminiAI_(campaignData) {
 
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
-  // German Umlaute corrected in prompt for better AI understanding
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
     DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
@@ -243,43 +283,21 @@ function callGeminiAI_(campaignData) {
     1. Gib **ausschlie?lich** ein HTML-Fragment zur?ck (kein \`\`\`html Block, kein <body>).
     2. Nutze eine ungeordnete Liste: <ul> f?r den Container, <li> f?r die Punkte.
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
-    4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
 
-    SPRACHREGELUNG (STRIKT):
-    1. **VERBOTENE WORTE (Niemals nutzen):** "Depletion", "Limited", "Budget Limited", "Missed", "Target Met", "Recommendation", "Efficiency Scale".
+    SPRACHREGELUNG & LOGIK:
+    1. **DATEN-INTERPRETATION:** - Wenn ein Wert "-" ist, bedeutet das "Keine Daten verf?gbar". Erfinde hier keine Zahlen.
+       - Wenn MissedConversions_Est = "-", darfst du KEINE entgangenen Conversions erw?hnen.
+       - Bei "Check in Google Ads" (RecommendedBudget): Schreibe "Manuelle Pr?fung empfohlen".
     2. **PFLICHT-?BERSETZUNGEN:**
        - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
-       - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
+       - "LostIS_Budget" -> "Anteil entgangener Impressionen (Budget)"
        - "Target Met" -> "Ziel erreicht"
-       - "RecommendedBudget" -> "empfohlene Tagesbudget"
-       - "Depletion" -> "Budget-Aussch?pfung" oder "Auslastung"
-    3. **AUSNAHME:** Das Wort "Conversion" oder "Conversions" darf (und soll) verwendet werden.
+    3. **NICHT** verwenden: "Depletion", "Efficiency Scale", "Missed".
 
-    REGELN F?R DEN INHALT:
-    1. **Abwechslung:** Variiere den Satzbau. Vermeide es, jeden Punkt identisch zu beginnen ("Die Kampagne...").
-    2. **Keine Redundanz:** Schreibe NIEMALS "Wir verlieren entgangene Conversions". Das ist doppelt gemoppelt. 
-       - RICHTIG: "Uns entgehen rechnerisch ca. [X] Conversions" oder "Das ungenutzte Potenzial liegt bei [X] Conversions".
-    3. **Clustering:** Fasse Kampagnen mit gleicher Situation logisch zusammen.
-    4. **Tonalit?t:** Neutral, analytisch, l?sungsorientiert.
-
-    ANALYSE-PRIORIT?TEN:
-    
-    1. **Prio 1 (Effizienz-Skalierung):**
-       - Wenn: Target Met = JA UND (Status = Limited ODER Depletion > 90%).
-       - Strategie: Betone, dass die Kampagne effizient l?uft, aber vom Budget limitiert wird. Nenne die "entgangenen Conversions" und den "Anteil entgangener Impressionen aufgrund des Budgets". Schlage die Erh?hung auf das <b>[RecommendedBudget]</b> vor.
-
-    2. **Prio 2 (Wachstums-Potenzial):**
-       - Wenn: Target = "No Target" UND Limited.
-       - Strategie: Weise auf die starke Nachfrage hin, die das aktuelle Budget ?bersteigt. Empfiehl einen Test mit h?herem Budget, um das Volumen zu pr?fen.
-
-    3. **Prio 3 (Kapazit?ts-Warnung):**
-       - Wenn: Depletion > 85% (aber nicht limited).
-       - Strategie: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
-
-    BEISPIEL OUTPUT (Stil-Referenz):
+    BEISPIEL OUTPUT:
     <ul>
-    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, sto?en jedoch t?glich an ihr Limit. Aktuell entgehen uns hierdurch rechnerisch ca. 20 Conversions pro Woche (Anteil entgangener Impressionen aufgrund des Budgets: 52%). Um dieses Potenzial voll auszusch?pfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
-    <li>Bei <b>"Demand Gen"</b> sehen wir eine extrem hohe Nachfrage, die das Budget von <b>EUR 200.00</b> vollst?ndig auslastet. Eine Anpassung w?rde helfen, die Sichtbarkeit an starken Tagen zu sichern.</li>
+    <li><b>"Search Brand"</b> ist durch das Budget eingeschr?nkt. Es entgehen rechnerisch ca. 5.2 Conversions. Empfehlung: Erh?hung auf <b>EUR 50.00</b>.</li>
+    <li><b>"Video Awareness"</b> (Video) ist stark eingeschr?nkt. Da hier keine Conversion-Daten vorliegen, empfehlen wir, das Budget schrittweise zu erh?hen, um die Reichweite zu testen. System-Empfehlung: Manuelle Pr?fung empfohlen.</li>
     </ul>
   `;
 
