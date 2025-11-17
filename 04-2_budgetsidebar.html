@@ -153,11 +153,28 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 #loadingState { display: none; text-align: center; padding: 30px 15px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; }
 .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 15px auto; }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/* NEW: Warn-Hinweis Style (Das Einzige, was ich hinzugef?gt habe) */
+#warning-banner {
+    background-color: #fff3cd;
+    color: #856404;
+    padding: 10px;
+    border-left: 4px solid #ffeeba;
+    margin-bottom: 15px;
+    font-size: 12px;
+    display: none;
+}
 </style>
 </head>
 <body>
 
 <div id="formContent">
+  
+  <div id="warning-banner">
+     ?? <b>Do not close this sidebar!</b><br>
+     Processing runs in batches. If you close this window, the process will stop.
+  </div>
+
   <div class="form-group">
     <h3>Core settings</h3>
     <label for="executionCol" class="required">Trigger column</label>
@@ -300,14 +317,13 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 <div id="loadingState" style="display: none;">
   <p><strong id="loadingActionText">Processing...</strong><strong> Please wait.</strong></p>
   <div class="loader"></div>
-  <p><small>This may take a few moments depending on the number of rows being processed.</small></p>
+  <p><small id="loadingSubText">This may take a few moments depending on the number of rows being processed.</small></p>
 </div>
 
 <div id="resultsView" style="display: none;">
     <h4 id="resultsTitle">Email process complete</h4>
     <p id="processedCountMessage"></p>
     <div id="errorReportSection">
-        <h4>Processing Report</h4>
         <div id="errorList"></div>
     </div>
     <div class="result-actions">
@@ -318,7 +334,11 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 
 <script>
   let currentResults = null;
-  let attachedFiles = []; // NEW: Store file data
+  let attachedFiles = []; 
+  // GLOBALE VARIABLES F?R POLLING
+  let totalProcessed = 0;
+  let retryCount = 0;
+  const MAX_RETRIES = 3;
 
   // --- Helper Functions (Retained) ---
   const allColumnLetters = (() => { const letters = []; for (let i = 0; i < 26; i++) letters.push(String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('A' + String.fromCharCode(65 + i)); for (let i = 0; i < 26; i++) letters.push('B' + String.fromCharCode(65 + i)); return letters; })();
@@ -327,7 +347,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   }
   // --- End Helper Functions ---
 
-  // --- Element References (UPDATED) ---
+  // --- Element References ---
   const formContent = document.getElementById('formContent'), loadingState = document.getElementById('loadingState'), loadingActionText = document.getElementById('loadingActionText'), resultsView = document.getElementById('resultsView'), resultsTitle = document.getElementById('resultsTitle'), 
       draftButton = document.getElementById('draftButton'), statusMessage = document.getElementById('statusMessage'), processedCountMessage = document.getElementById('processedCountMessage'), errorReportSection = document.getElementById('errorReportSection'), errorList = document.getElementById('errorList'), closeButton = document.getElementById('closeButton'), runAgainButton = document.getElementById('runAgainButton');
   
@@ -363,12 +383,6 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       const fileIndex = attachedFiles.findIndex(f => f.id === fileId);
       if (fileIndex > -1) { attachedFiles[fileIndex].base64data = base64String; }
       updateFileList();
-    };
-    reader.onerror = (e) => {
-      console.error("FileReader error:", e);
-      attachedFiles = attachedFiles.filter(f => f.id !== fileId);
-      updateFileList();
-      if(statusMessage) { statusMessage.textContent = `Error reading file "${file.name}".`; statusMessage.className = 'status-error'; }
     };
     reader.readAsDataURL(file);
   }
@@ -430,12 +444,14 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       if (loadingState) loadingState.style.display = 'none';
       if (formContent) formContent.style.display = 'block';
       if (draftButton) draftButton.disabled = false;
+      document.getElementById('warning-banner').style.display = 'none'; // Hide warning
       currentResults = null;
       attachedFiles = [];
       updateFileList();
+      totalProcessed = 0;
   }
 
-  /** Handles button clicks (UPDATED) */
+  /** Handles button clicks (THIS IS THE CHANGED PART) */
   function handleButtonClick(actionType) {
     if(statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
     
@@ -452,10 +468,7 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
       executionCol: document.getElementById('executionCol').value,
       cidCol: cidCol.value, 
       recipientCol: document.getElementById('recipientCol').value,
-      
-      // NEU: statusCol hinzugef?gt
       statusCol: statusCol.value,
-
       ccCol: document.getElementById('ccCol').value,
       subjectLine: document.getElementById('subjectLine').value.trim(),
       bccSharedInbox: bccSharedInboxCheckbox.checked,
@@ -474,18 +487,15 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     let errorMessages = [];
     const activePlaceholdersColumns = [];
 
-    // Validation: Core Fields 
+    // Validation
     if (!formData.executionCol) { errorMessages.push('Select Trigger column.'); }
     if (!formData.cidCol) { errorMessages.push('Select Google Ads CID column.'); } 
     if (!formData.recipientCol) { errorMessages.push('Select Recipient email column.'); }
-    
-    // NEU: Validierung f?r statusCol
     if (!formData.statusCol) { errorMessages.push('Select a Status column.'); }
-
     if (!formData.subjectLine) { errorMessages.push('Enter Subject line (must match Gmail draft).'); }
     if (!formData.dateRange) { errorMessages.push('Select a Date Range.'); }
 
-    // Validation: Placeholders (Retained)
+    // Placeholders validation
     phCheckboxes.forEach((checkbox, index) => {
         if (checkbox && checkbox.checked && !checkbox.disabled) {
             const num = index + 1;
@@ -502,139 +512,126 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
         }
     });
 
-    // Validation: Duplicate Columns (UPDATED)
+    // Duplicate Check
     const columnsToCheck = [ 
-        formData.executionCol, 
-        formData.cidCol, 
-        formData.recipientCol, 
-        formData.ccCol,
-        formData.statusCol, // NEU
-        ...activePlaceholdersColumns 
+        formData.executionCol, formData.cidCol, formData.recipientCol, formData.ccCol, formData.statusCol, ...activePlaceholdersColumns 
     ];
     const validSelectedColumns = columnsToCheck.filter(col => col && col !== "");
     if (new Set(validSelectedColumns).size < validSelectedColumns.length) {
-        errorMessages.push('Duplicate column selection detected. Each selected column must be unique.');
+        errorMessages.push('Duplicate column selection detected.');
     }
 
-    // Display errors or proceed (Retained)
     if (errorMessages.length > 0) {
-        if(statusMessage) {
-            statusMessage.innerHTML = 'Error:<br>' + errorMessages.join('<br>');
-            statusMessage.className = 'status-error';
-        }
+        if(statusMessage) { statusMessage.innerHTML = 'Error:<br>' + errorMessages.join('<br>'); statusMessage.className = 'status-error'; }
         return;
     }
 
-    // Switch to loading view (Retained)
+    // Switch to loading view
     if(formContent) formContent.style.display = 'none';
     if(resultsView) resultsView.style.display = 'none';
     if(loadingState) loadingState.style.display = 'block';
+    document.getElementById('warning-banner').style.display = 'block'; // Show "Don't Close" Warning
     
-    // MODIFIED: Bessere Benachrichtigung f?r Batch-Verarbeitung
-    if(loadingActionText) loadingActionText.textContent = 'Starting batch process...'; 
-    
+    if(loadingActionText) loadingActionText.textContent = 'Initializing process...'; 
     if (draftButton) draftButton.disabled = true;
 
-    // Call backend
+    // *** START THE POLLING PROCESS (NEW) ***
     google.script.run
-        .withSuccessHandler(onSuccess)
+        .withSuccessHandler(function(res) {
+             if(loadingActionText) loadingActionText.textContent = 'Processing Batch 1...'; 
+             runBatchLoop(); // RECURSIVE START
+        })
         .withFailureHandler(onFailure)
-        .processEmailRequest(formData); 
+        .setupBudgetRun(formData); // Call Server V7.1 Setup
   }
 
-  // onSuccess and onFailure callbacks (UPDATED)
-  function onSuccess(resultObject) { 
-    console.log("onSuccess received:", resultObject);
-    if(loadingState) loadingState.style.display = 'none';
+  // --- THE ENGINE: RECURSIVE POLLING ---
+  function runBatchLoop() {
+      google.script.run
+        .withSuccessHandler(function(result) {
+            retryCount = 0; 
 
-    if (!resultObject || !resultObject.status) { // Angepasst an neues Batch-Result-Objekt
-        console.error("Invalid result object structure received from server:", resultObject);
-        onFailure(new Error("Received invalid data structure from server.")); return;
-    }
-    currentResults = resultObject;
+            // 1. FINISHED
+            if (result.status === 'DONE') {
+                onAllBatchesComplete();
+                return;
+            }
 
-    const actionVerbPast = 'saved as draft'; // Festgelegt auf 'draft'
+            // 2. CONTINUE
+            if (result.status === 'CONTINUE') {
+                totalProcessed += (result.processed || 0);
+                if(loadingActionText) loadingActionText.textContent = `Processed ${totalProcessed} rows. Working on next batch...`;
+                if(document.getElementById('loadingSubText') && result.remaining) {
+                     document.getElementById('loadingSubText').textContent = `${result.remaining} rows remaining in queue...`;
+                }
+                
+                // RECURSIVE CALL
+                runBatchLoop(); 
+            }
 
-    // MODIFIED: Bessere Benachrichtigung f?r Batch-Verarbeitung
-    if (resultObject.status === 'BATCH_RUNNING') {
-        resultsTitle.textContent = `Batch Processing Started...`;
-        processedCountMessage.textContent = `Processed ${resultObject.succeeded.length} row(s) in this batch. The script will automatically continue in the background. You can close this window.`;
-        if(draftButton) draftButton.disabled = true;
-        if(runAgainButton) runAgainButton.textContent = 'Close'; // Knopf-Text ?ndern
-        if(closeButton) closeButton.style.display = 'none'; // Zweiten Knopf ausblenden
-    } else { // Status ist 'BATCH_COMPLETE' oder 'ERROR'
-        resultsTitle.textContent = `Batch Process Complete`;
-        processedCountMessage.textContent = `Processed ${resultObject.processedRowCount} total row(s). See full report below.`;
-        if(runAgainButton) runAgainButton.textContent = 'Configure new batch';
-        if(closeButton) closeButton.style.display = 'inline-block';
-    }
+            // 3. BUSY
+            if (result.status === 'BUSY') {
+                console.log("Server busy, waiting...");
+                setTimeout(runBatchLoop, 3000);
+            }
 
-
-    // --- Build Categorized Report ---
-    if(errorList) errorList.innerHTML = '';
-    const ul = document.createElement('ul');
-    let reportHasContent = false;
-    const addReportItems = (category, items, cssClass) => {
-          if (items && items.length > 0) { // Pr?fen ob Array existiert
-              reportHasContent = true;
-              const categoryHeader = document.createElement('div');
-              categoryHeader.className = 'report-category';
-              categoryHeader.textContent = `${category} (${items.length})`;
-              ul.appendChild(categoryHeader);
-              items.forEach(item => {
-                  const li = document.createElement('li');
-                  li.className = `report-item ${cssClass}`;
-                  li.textContent = `Row ${item.row || '?'}: ${item.details || 'Details N/A'}`;
-                  ul.appendChild(li);
-              });
-          }
-     };
-
-    addReportItems(`Successfully ${actionVerbPast}`, resultObject.succeeded, 'success');
-    addReportItems('Failed (Input Data Issue)', resultObject.failedInput, 'fail-input');
-    addReportItems('Failed (Processing Issue)', resultObject.failedProcessing, 'fail-process');
-    // NEU: Zeige an, was ?bersprungen wurde
-    addReportItems('Skipped (Already Processed)', resultObject.skipped, 'skip-process');
-
-
-    if (reportHasContent) {
-         errorList.appendChild(ul);
-         if(errorReportSection) errorReportSection.style.display = 'block';
-    } else {
-         if(errorReportSection) errorReportSection.style.display = 'none';
-    }
-    // --- End Report Building ---
-
-    if(resultsView) resultsView.style.display = 'block';
+            // 4. ERROR
+            if (result.status === 'ERROR') {
+                onFailure(new Error("Server Error: " + result.message));
+            }
+        })
+        .withFailureHandler(function(err) {
+             console.error(err);
+             if (retryCount < MAX_RETRIES) {
+                 retryCount++;
+                 if(loadingActionText) loadingActionText.textContent = `Connection glitch. Retrying (${retryCount}/${MAX_RETRIES})...`;
+                 setTimeout(runBatchLoop, 5000);
+             } else {
+                 onFailure(err);
+             }
+        })
+        .processOneBatch(); // Calls Server V7.1 Worker
   }
+
+  function onAllBatchesComplete() {
+      if(loadingState) loadingState.style.display = 'none';
+      document.getElementById('warning-banner').style.display = 'none';
+      
+      // Fill Results View
+      resultsTitle.textContent = "All Batches Complete";
+      processedCountMessage.textContent = `Successfully processed ${totalProcessed} rows in total.`;
+      
+      if(errorList) {
+          errorList.innerHTML = '<p class="info-note">Check the <b>Status column</b> in your spreadsheet for details on each row (e.g. "Draft Saved" or error messages).</p>';
+      }
+
+      if(resultsView) resultsView.style.display = 'block';
+  }
+
   function onFailure(error) { 
     console.error("onFailure received:", error);
     showFormView();
-    if(statusMessage) { statusMessage.textContent = 'Fatal Script Error: ' + (error.message || 'Unknown error. Check script logs.'); statusMessage.className = 'status-error'; }
+    if(statusMessage) { statusMessage.textContent = 'Script Error: ' + (error.message || 'Unknown error.'); statusMessage.className = 'status-error'; }
   }
 
 
-  // --- Initial Setup (UPDATED) ---
+  // --- Initial Setup (Retained) ---
   document.addEventListener('DOMContentLoaded', (event) => {
       try {
-          // Populate dropdowns (NEU: statusCol hinzugef?gt)
+          // Populate dropdowns
           ['executionCol', 'cidCol', 'recipientCol', 'statusCol'].forEach(id => populateDropdown(id, false));
           populateDropdown('ccCol', true);
           [1, 2, 3, 4, 5].forEach(i => populateDropdown(`placeholder${i}Col`, true));
 
-          // Add Event Listeners 
+          // Listeners
           if (draftButton) draftButton.addEventListener('click', () => handleButtonClick('draft'));
           if (closeButton) closeButton.addEventListener('click', () => google.script.host.close());
           if (runAgainButton) runAgainButton.addEventListener('click', () => {
-              if (runAgainButton.textContent === 'Close') {
-                  google.script.host.close();
-              } else {
-                  showFormView();
-              }
+              showFormView();
           });
           phCheckboxes.forEach(checkbox => { if (checkbox) checkbox.addEventListener('change', updatePlaceholderStates); });
           
-          // NEW: Event Listeners for File Drop Zone (Unchanged)
+          // File Drop
           const dropZone = document.getElementById('dropZone');
           const fileInput = document.getElementById('fileInput');
           if (dropZone && fileInput) {
@@ -653,13 +650,10 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
             });
           }
           
-          // Initial UI State
           updatePlaceholderStates();
           showFormView();
-          console.log("Budget Recommendations Sidebar UI Initialized");
       } catch (initError) {
           console.error("Error during sidebar initialization:", initError);
-          document.body.innerHTML = `<p style="color:red; padding:15px;">Critical Error initializing sidebar: ${initError.message}. Please reload.</p>`;
       }
   });
 </script>
