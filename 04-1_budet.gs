@@ -1,270 +1,235 @@
 /**
- * @file 04-1_budet.gs (Version 4.4 - Attachment Cleanup Logic)
+ * @file 04-1_budet.gs (Version 7.3 - Client-Side Polling)
  * @description Orchestrator f?r Budget-Empfehlungen.
- * - Verarbeitet Batch-Logik.
- * - Bereinigt alte Attachments beim Start.
- * - Pufferung von gro?en Anh?ngen ?ber DriveApp.
+ * - Logik 1:1 ?bernommen aus v5.2.
+ * - Architektur ge?ndert auf Client-Side Polling (vermeidet Trigger-Quotas).
+ * - BATCH_SIZE = 3 (Sicherheitslimit).
  */
 
-const BATCH_SIZE = 3;
-const TRIGGER_DELAY_SECONDS = 15;
+const BATCH_SIZE = 3; 
 
-function processEmailRequest(formData) {
-  Logger.log(`\n=== START processEmailRequest (Orchestrator) ===`);
+// ================================================================
+// 1. SETUP (Wird einmalig beim Start geklickt)
+// ================================================================
+function setupBudgetRun(formData) {
+  console.log("--- START: Setup Budget Run ---");
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("Kein aktives Spreadsheet gefunden. Bitte Add-on in Tabelle nutzen.");
     const sheet = ss.getActiveSheet();
-    
-    Logger.log(`> Initializing for Spreadsheet: "${ss.getName()}"`);
 
-    // 1. Alte Trigger & Daten bereinigen
-    deleteTrigger_('executeBudgetRun_');
-    
-    // WICHTIG: Alte Formulardaten explizit l?schen, damit keine alten Anh?nge ?berleben
-    PropertiesService.getScriptProperties().deleteProperty('budgetBatchFormData');
-    Logger.log("> Previous session data cleared.");
-    
-    // 2. GROSSE DATEIEN BEHANDELN (Drive Pufferung)
-    if (formData.attachedFiles && formData.attachedFiles.length > 0) {
-        Logger.log(`> Offloading ${formData.attachedFiles.length} attachments to Drive temp storage...`);
-        const processedFiles = [];
-        
-        for (const file of formData.attachedFiles) {
-            if (file.base64data) {
-                const blob = Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename);
-                const driveFile = DriveApp.createFile(blob);
-                
-                processedFiles.push({
-                    filename: file.filename,
-                    mimeType: file.mimeType,
-                    driveFileId: driveFile.getId(),
-                    isTemp: true
-                });
-                Logger.log(`  - Uploaded "${file.filename}" to Drive (ID: ${driveFile.getId()})`);
-            }
-        }
-        formData.attachedFiles = processedFiles;
-    } else {
-        // Wenn KEINE Dateien da sind, explizit leeres Array setzen
-        formData.attachedFiles = [];
-    }
+    // 1. UserProperties bereinigen (Clean Slate)
+    PropertiesService.getUserProperties().deleteProperty('budgetBatchFormData');
 
-    // 3. Konfiguration speichern
+    // 2. Config anreichern
     formData.spreadsheetId = ss.getId();
     formData.sheetName = sheet.getName();
     
-    PropertiesService.getScriptProperties().setProperty('budgetBatchFormData', JSON.stringify(formData));
-    Logger.log("> New configuration saved.");
+    // 3. Dateiuploads verarbeiten (in Drive puffern, da PropertyService zu klein)
+    if (formData.attachedFiles && formData.attachedFiles.length > 0) {
+       const processedFiles = [];
+       for (const file of formData.attachedFiles) {
+          if (file.base64data) {
+              try {
+                  const blob = Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename);
+                  const driveFile = DriveApp.createFile(blob);
+                  processedFiles.push({
+                      filename: file.filename, mimeType: file.mimeType,
+                      driveFileId: driveFile.getId(), isTemp: true
+                  });
+              } catch (e) { console.error("File upload error:", e); }
+          }
+       }
+       formData.attachedFiles = processedFiles;
+    } else {
+       formData.attachedFiles = [];
+    }
 
-    // 4. Starten
-    executeBudgetRun_();
+    // Config final speichern (User Scope)
+    PropertiesService.getUserProperties().setProperty('budgetBatchFormData', JSON.stringify(formData));
 
-    return {
-      status: 'BATCH_RUNNING',
-      succeeded: [1], failedInput: [], failedProcessing: [], skipped: []
-    };
+    return { status: 'READY' };
   } catch (e) {
-    Logger.log(`FATAL ERROR in processEmailRequest: ${e.message}`);
-    return { status: 'ERROR', processedRowCount: 0, succeeded: [], failedInput: [], failedProcessing: [{ details: e.message }] };
+    console.error("Setup Failed:", e);
+    throw new Error(e.message); 
   }
 }
 
 // ================================================================
-// BATCH PROCESSING (Worker)
+// 2. WORKER (Wird immer wieder von der Sidebar aufgerufen)
 // ================================================================
-
-function executeBudgetRun_() {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
-      Logger.log("Skipping run: Lock busy.");
-      return;
-  }
-
-  Logger.log("\n--- executeBudgetRun_ (Worker) Started ---");
-  let formData = null; 
+function processOneBatch() {
+  // Lock verhindert Kollisionen, falls Sidebar zu schnell feuert
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(5000)) return { status: 'BUSY' }; 
 
   try {
     // 1. Config laden
-    const formDataJson = PropertiesService.getScriptProperties().getProperty('budgetBatchFormData');
-    if (!formDataJson) {
-      Logger.log("STOP: No configuration found.");
-      deleteTrigger_('executeBudgetRun_');
-      lock.releaseLock();
-      return;
-    }
-    formData = JSON.parse(formDataJson);
+    const formDataJson = PropertiesService.getUserProperties().getProperty('budgetBatchFormData');
+    if (!formDataJson) return { status: 'ERROR', message: "Konfiguration verloren. Bitte neu starten." };
+    const formData = JSON.parse(formDataJson);
 
     // 2. Sheet ?ffnen
-    const spreadsheet = SpreadsheetApp.openById(formData.spreadsheetId);
-    const sheet = spreadsheet.getSheetByName(formData.sheetName);
-    if (!sheet) {
-        Logger.log(`CRITICAL: Sheet "${formData.sheetName}" not found!`);
-        lock.releaseLock();
-        return;
-    }
-
-    // 3. Spalten Mapping
+    const sheet = SpreadsheetApp.openById(formData.spreadsheetId).getSheetByName(formData.sheetName);
+    if (!sheet) return { status: 'ERROR', message: "Sheet nicht mehr gefunden." };
+    
+    // 3. Spalten & Daten holen (Logik aus v5.2)
     const executionColIndex = columnLetterToIndex_(formData.executionCol, sheet);
-    const cidColIndex = columnLetterToIndex_(formData.cidCol, sheet);
-    const recipientColIndex = columnLetterToIndex_(formData.recipientCol, sheet);
     const statusColIndex = columnLetterToIndex_(formData.statusCol, sheet);
-    const ccColIndex = formData.ccCol ? columnLetterToIndex_(formData.ccCol, sheet) : -1;
     
-    if (executionColIndex === -1 || cidColIndex === -1 || statusColIndex === -1) {
-        Logger.log("CRITICAL: Invalid column mapping.");
-        lock.releaseLock();
-        return;
-    }
-
-    // Placeholder Map
-    const placeholderMap = buildPlaceholderMap_budget(formData, sheet);
+    const lastRow = sheet.getLastRow();
+    const data = sheet.getRange(1, 1, lastRow, sheet.getLastColumn()).getValues();
     
-    // Daten lesen
-    const maxRows = sheet.getMaxRows();
-    const allIndices = [executionColIndex, cidColIndex, recipientColIndex, statusColIndex, ccColIndex, ...Object.values(placeholderMap)];
-    const readWidth = Math.max(...allIndices.filter(i => i > -1)) + 1;
-    
-    const data = sheet.getRange(1, 1, maxRows, readWidth).getValues();
+    // Scan nach offenen Aufgaben
     const rowsToProcess = [];
-
     for (let i = 0; i < data.length; i++) {
       const trigger = String(data[i][executionColIndex] || '').trim();
       const status = String(data[i][statusColIndex] || '').trim();
+      // Bedingung: Trigger ist '1' UND Status ist leer
       if (trigger === '1' && status === '') {
         rowsToProcess.push({ rowNumber: i + 1, rowData: data[i] });
       }
     }
 
-    // 4. Batch Check & Cleanup
+    // --- CHECK: ALLES FERTIG? ---
     if (rowsToProcess.length === 0) {
-      Logger.log("=== ALL DONE. Stopping Triggers & Cleaning up. ===");
-      
-      // CLEANUP: Tempor?re Dateien l?schen
-      if (formData.attachedFiles && formData.attachedFiles.length > 0) {
-          formData.attachedFiles.forEach(f => {
-              if (f.driveFileId && f.isTemp) {
-                  try { 
-                      DriveApp.getFileById(f.driveFileId).setTrashed(true); 
-                      Logger.log(`Deleted temp file: ${f.filename}`);
-                  } catch(e) {
-                      Logger.log(`Warning: Could not delete temp file ${f.driveFileId}: ${e.message}`);
-                  }
-              }
-          });
-      }
-
-      deleteTrigger_('executeBudgetRun_');
-      PropertiesService.getScriptProperties().deleteProperty('budgetBatchFormData');
-      lock.releaseLock();
-      return;
-    }
-
-    // 5. Batch Verarbeitung
-    const currentBatch = rowsToProcess.slice(0, BATCH_SIZE);
-    Logger.log(`> Processing Batch of ${currentBatch.length} rows...`);
-
-    const emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true);
-    
-    // ANH?NGE LADEN
-    const userAttachments = [];
-    if (formData.attachedFiles && formData.attachedFiles.length > 0) {
-        formData.attachedFiles.forEach(file => {
-            if (file.driveFileId) {
-                try {
-                    const blob = DriveApp.getFileById(file.driveFileId).getBlob();
-                    userAttachments.push(blob);
-                } catch(e) {
-                    Logger.log(`Error retrieving attachment "${file.filename}" from Drive: ${e.message}`);
-                }
-            }
-        });
-    }
-
-    for (const item of currentBatch) {
-      const rowNumber = item.rowNumber;
-      const rowData = item.rowData;
-      Logger.log(`\n--- Processing Row ${rowNumber} ---`);
-
-      try {
-        sheet.getRange(rowNumber, statusColIndex + 1).setValue("Processing...");
-        
-        const cidRaw = String(rowData[cidColIndex] || '').trim();
-        const recipientRaw = String(rowData[recipientColIndex] || '').trim();
-        const ccRaw = (ccColIndex > -1) ? String(rowData[ccColIndex] || '').trim() : "";
-
-        if (!cidRaw) throw new Error("Missing CID");
-        if (!recipientRaw.includes('@')) throw new Error("Invalid Email");
-
-        // KI Analyse (Single Source of Truth)
-        const analysisResult = generateUnifiedAiBudgetAnalysis(cidRaw, formData.dateRange);
-
-        // Template
-        const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap);
-        const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
-        let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
-        let finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders);
-
-        finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', analysisResult.aiHtml);
-        finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', 'Siehe HTML-Version f?r AI-Analyse.');
-
-        // Anh?nge
-        const finalAttachments = [...emailTemplate.attachments, ...userAttachments];
-        
-        if (formData.enablePdfAttachment) {
-           const pdfBlob = createBudgetReportPdf_(
-             analysisResult.allCampaignsData, 
-             analysisResult.currency, 
-             analysisResult.externalCid,
-             formData.dateRange
-           );
-           if (pdfBlob) finalAttachments.push(pdfBlob);
+        console.log("=== DONE: No more rows found. ===");
+        // Aufr?umen
+        if (formData.attachedFiles) {
+            formData.attachedFiles.forEach(f => {
+                if (f.driveFileId && f.isTemp) try { DriveApp.getFileById(f.driveFileId).setTrashed(true); } catch(e) {}
+            });
         }
-
-        const options = {
-          htmlBody: finalBodyHtml,
-          cc: ccRaw.replace(/;\s*/g, ',').trim() || undefined,
-          attachments: finalAttachments,
-          inlineImages: emailTemplate.inlineImages,
-          bcc: buildBccString_budget({ sharedInbox: formData.bccSharedInbox, pop: formData.bccPop })
-        };
-
-        GmailApp.createDraft(recipientRaw, finalSubject, finalBodyText, options);
-        
-        sheet.getRange(rowNumber, statusColIndex + 1).setValue("Draft Saved");
-        Logger.log("  SUCCESS: Draft Created.");
-
-      } catch (e) {
-        Logger.log(`  ERROR Row ${rowNumber}: ${e.message}`);
-        sheet.getRange(rowNumber, statusColIndex + 1).setValue(`Error: ${e.message}`);
-      }
+        PropertiesService.getUserProperties().deleteProperty('budgetBatchFormData');
+        return { status: 'DONE' }; 
     }
 
-    SpreadsheetApp.flush();
+    // --- BATCH STARTEN ---
+    const currentBatch = rowsToProcess.slice(0, BATCH_SIZE);
+    console.log(`Processing batch of ${currentBatch.length} rows...`);
+    
+    // Die eigentliche Arbeit ausf?hren (ausgelagert, um Hauptfunktion sauber zu halten)
+    processBatchItems_(currentBatch, formData, sheet); 
 
-    if (rowsToProcess.length > BATCH_SIZE) {
-      createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
-    } else {
-      createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
-    }
+    // R?ckmeldung an Sidebar
+    return { 
+        status: 'CONTINUE', 
+        processed: currentBatch.length, 
+        remaining: rowsToProcess.length - currentBatch.length 
+    };
 
   } catch (e) {
-    Logger.log(`GLOBAL ERROR: ${e.message}`);
-    createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
+    console.error("Worker Error:", e);
+    return { status: 'ERROR', message: e.message };
   } finally {
     lock.releaseLock();
   }
 }
 
-// --- Helper Wrappers & Utils ---
-function createTrigger_(func, sec) {
-  deleteTrigger_(func);
-  ScriptApp.newTrigger(func).timeBased().after(sec * 1000).create();
+// ================================================================
+// 3. INTERNE VERARBEITUNG (1:1 Logik aus v5.2 executeBudgetRun_)
+// ================================================================
+function processBatchItems_(batch, formData, sheet) {
+    // Mappings vorbereiten
+    const cidColIndex = columnLetterToIndex_(formData.cidCol, sheet);
+    const recipientColIndex = columnLetterToIndex_(formData.recipientCol, sheet);
+    const statusColIndex = columnLetterToIndex_(formData.statusCol, sheet);
+    const ccColIndex = formData.ccCol ? columnLetterToIndex_(formData.ccCol, sheet) : -1;
+    
+    const placeholderMap = buildPlaceholderMap_budget(formData, sheet);
+    
+    // Template laden
+    let emailTemplate;
+    try {
+       emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true);
+    } catch(e) {
+       throw new Error(`Draft Template nicht gefunden: "${formData.subjectLine}"`);
+    }
+
+    // Anh?nge vorbereiten
+    const userAttachments = [];
+    if (formData.attachedFiles) {
+        formData.attachedFiles.forEach(file => {
+            if (file.driveFileId) try { userAttachments.push(DriveApp.getFileById(file.driveFileId).getBlob()); } catch(e) {}
+        });
+    }
+
+    // SCHLEIFE DURCH DIE ITEMS
+    for (const item of batch) {
+        const rowNumber = item.rowNumber;
+        const rowData = item.rowData;
+
+        try {
+             // Status setzen
+             sheet.getRange(rowNumber, statusColIndex + 1).setValue("Processing...");
+             SpreadsheetApp.flush(); // Wichtig: Sofortiges Feedback im Sheet
+
+             const cidRaw = String(rowData[cidColIndex] || '').trim();
+             const recipientRaw = String(rowData[recipientColIndex] || '').trim();
+             const ccRaw = (ccColIndex > -1) ? String(rowData[ccColIndex] || '').trim() : "";
+
+             if (!cidRaw) throw new Error("Missing CID");
+             if (!recipientRaw.includes('@')) throw new Error("Invalid Email");
+
+             // 1. KI Analyse (External Tool)
+             const analysisResult = generateUnifiedAiBudgetAnalysis(cidRaw, formData.dateRange);
+             
+             // 2. PDF Erstellung (External Tool) - mit Sicherheitscheck
+             const finalAttachments = [...emailTemplate.attachments, ...userAttachments];
+             
+             if (formData.enablePdfAttachment) {
+                // Fallbacks, falls Analyse-Daten unvollst?ndig
+                const pdfData = analysisResult.allCampaignsData || [];
+                const pdfCurr = analysisResult.currency || "EUR";
+                const pdfCid = analysisResult.externalCid || cidRaw;
+
+                if (pdfData.length > 0) {
+                    try {
+                        const pdfBlob = createBudgetReportPdf_(pdfData, pdfCurr, pdfCid, formData.dateRange);
+                        if (pdfBlob) finalAttachments.push(pdfBlob);
+                    } catch(pdfErr) {
+                        console.error("PDF Gen Error:", pdfErr);
+                    }
+                }
+             }
+
+             // 3. Platzhalter & Template
+             const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap);
+             const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
+             let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
+             let finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders);
+
+             // KI Content einf?gen
+             const aiContent = analysisResult.aiHtml || "<p>Keine Analyse verf?gbar.</p>";
+             finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', aiContent);
+             finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', 'Siehe HTML-Version.');
+
+             // 4. Draft erstellen
+             const options = {
+                 htmlBody: finalBodyHtml,
+                 cc: ccRaw.replace(/;\s*/g, ',').trim() || undefined,
+                 attachments: finalAttachments,
+                 inlineImages: emailTemplate.inlineImages,
+                 bcc: buildBccString_budget({ sharedInbox: formData.bccSharedInbox, pop: formData.bccPop })
+             };
+             
+             GmailApp.createDraft(recipientRaw, finalSubject, finalBodyText, options);
+             
+             // Erfolg markieren
+             sheet.getRange(rowNumber, statusColIndex + 1).setValue("Draft Saved");
+             
+        } catch (e) {
+            sheet.getRange(rowNumber, statusColIndex + 1).setValue("Error: " + e.message);
+        }
+        
+        // Nach jeder Zeile speichern!
+        SpreadsheetApp.flush();
+    }
 }
 
-function deleteTrigger_(funcName) {
-  const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(t => { if(t.getHandlerFunction() === funcName) ScriptApp.deleteTrigger(t); });
-}
+// ================================================================
+// LOKALE HELPER (Identisch zu v5.2)
+// ================================================================
 
 function buildBccString_budget(t) { 
   const b = []; 
@@ -287,36 +252,27 @@ function extractPlaceholderValues_(rowData, placeholderMap) {
   const values = {};
   for (const name in placeholderMap) {
     const index = placeholderMap[name];
-    if (index > -1 && index < rowData.length) {
-      values[name] = rowData[index]?.toString().trim() ?? "";
-    } else {
-      values[name] = "";
-    }
+    values[name] = (index > -1 && index < rowData.length) ? (rowData[index]?.toString().trim() ?? "") : "";
   }
   return values;
 }
 
 function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
-  if (!subject_line || subject_line.trim() === "") throw new Error("Subject line cannot be empty.");
   const drafts = GmailApp.getDrafts();
   const matchingDrafts = drafts.filter(d => d.getMessage().getSubject() === subject_line);
-  if (matchingDrafts.length === 0) throw new Error(`No Gmail draft found with subject: "${subject_line}"`);
-  if (requireUnique && matchingDrafts.length > 1) throw new Error(`Multiple Gmail drafts found.`);
-
+  if (matchingDrafts.length === 0) throw new Error(`No draft found: "${subject_line}"`);
+  
   const msg = matchingDrafts[0].getMessage();
   let attachments = [];
   let inlineImages = {};
-  try {
-    attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
-  } catch(e) { Logger.log(`Error attachments: ${e.message}`); }
-  try {
-    const rawInline = msg.getAttachments({ includeInlineImages: true, includeAttachments: false });
-    rawInline.forEach(img => {
-      const cidHeader = img.getHeaders()['Content-ID'];
-      const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
-      if (cid) inlineImages[cid] = img.copyBlob();
-    });
-  } catch(e) { Logger.log(`Error inline images: ${e.message}`); }
+  try { attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true }); } catch(e){}
+  try { 
+      const raw = msg.getAttachments({ includeInlineImages: true, includeAttachments: false }); 
+      raw.forEach(img => {
+          const cid = img.getHeaders()['Content-ID']?.replace(/[<>]/g, "");
+          if(cid) inlineImages[cid] = img.copyBlob();
+      });
+  } catch(e){}
 
   return {
     message: { text: msg.getPlainBody() || "", html: msg.getBody() || "" },
@@ -329,3 +285,8 @@ function convertBase64ToBlobs_(files) {
     if (!files || files.length === 0) return [];
     return files.map(file => Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename));
 }
+
+// ANMERKUNG:
+// Die Funktionen columnLetterToIndex_, generateUnifiedAiBudgetAnalysis, 
+// createBudgetReportPdf_ und fillPlaceholdersInString_
+// m?ssen in '100-1 helperstools.gs' vorhanden sein.
