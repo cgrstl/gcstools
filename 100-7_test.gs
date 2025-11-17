@@ -1,14 +1,14 @@
 /**
  * 100-6: Unified Campaign Performance Report (Test).
  * Combines logic from 100-3, 100-4, and 100-5.
- * - Aggregates 14-day data. (UPDATED)
+ * - Aggregates 7-day data.
  * - Calculates: Budget Depletion, Missed Conversions, Target Hit/Miss.
  * - Reports: Budget Recommendations & Estimated Cost Increase.
  */
 function testUnifiedCampaignReport() {
   
   const TEST_CID_RAW = '6662487282'; 
-  const REPORT_DAYS = 14; // <<<< ANGEPASST AUF 14 TAGE
+  const REPORT_DAYS = 7;
 
   // --- CONSTANTS ---
   const DATE_START = 'YYYY-MM-DD_START';
@@ -26,7 +26,7 @@ function testUnifiedCampaignReport() {
     const endDate = new Date();
     endDate.setDate(endDate.getDate() - 1); 
     const startDate = new Date(endDate.getTime());
-    startDate.setDate(endDate.getDate() - 13); // <<<< ANGEPASST: 14 TAGE (14 - 1 = 13)
+    startDate.setDate(endDate.getDate() - 6); 
     return {
         start: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
         end: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
@@ -209,7 +209,7 @@ function testUnifiedCampaignReport() {
         const totalCost = c.cost / 1000000; // Standard Units
         let depletion = 0;
         if (dailyBudget > 0) {
-            const avgDailySpend = totalCost / REPORT_DAYS; // <<<< KORREKTE NUTZUNG VON REPORT_DAYS (14)
+            const avgDailySpend = totalCost / REPORT_DAYS;
             depletion = (avgDailySpend / dailyBudget) * 100;
         }
 
