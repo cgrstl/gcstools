@@ -1,15 +1,13 @@
 /**
- * 100-6: Unified Campaign Performance & AI Pitch Generation.
- * VERSION: "FULL DATA INTEGRITY"
- * * FIXES:
- * 1. All Metrics included: ImpressionShare, LostIS_Rank, TimeRange are back in the JSON.
- * 2. Sort Key Cleanup: Only _sortKey is removed before sending.
- * 3. Logic: Strict Golden Master Logic + Robust Prompt.
+ * 100-6 / 1007-8: Unified Campaign Performance & AI Pitch Generation.
+ * VERSION: "STRICT PROMPT RESTORED"
+ * * LOGIC: Golden Master Data Logic (Add-Ons, Shopping, Dates).
+ * * PROMPT: Original Version 3.3 (Max 3 Bullets, Clustering).
+ * * API: Returns Object for Orchestrator.
  */
-function testUnifiedCampaignReportWithAI() {
+function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   
-  const TEST_CID_RAW = '6662487282'; 
-  const TIME_RANGE = 'LAST_7_DAYS'; // Options: LAST_7_DAYS, LAST_14_DAYS, LAST_30_DAYS
+  const TIME_RANGE = dateRangeString || 'LAST_7_DAYS'; 
 
   // --- DYNAMIC CONSTANTS ---
   let reportDays = 7;
@@ -20,7 +18,12 @@ function testUnifiedCampaignReportWithAI() {
   const TYPES_FOR_CALCULATION = ['SEARCH', 'PERFORMANCE_MAX', 'SHOPPING']; 
   const TYPES_IS_QUERY = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
 
-  Logger.log(`\n=== STARTING AI PITCH TEST (CID: ${TEST_CID_RAW}) ===`);
+  Logger.log(`\n=== STARTING AI ANALYSIS (CID: ${cidRaw}, Range: ${TIME_RANGE}) ===`);
+
+  let externalCid = cidRaw;
+  let currency = 'EUR';
+  let finalAiHtml = "<ul><li>Keine aktiven Kampagnendaten gefunden.</li></ul>";
+  const allCampaignsData = []; // For PDF
 
   // --- LOCAL HELPERS ---
   const executeLocalQuery = (clientId, query) => {
@@ -67,13 +70,15 @@ function testUnifiedCampaignReportWithAI() {
 
   // --- MAIN EXECUTION ---
   try {
-    const cidTrimmed = String(TEST_CID_RAW).trim();
+    const cidTrimmed = String(cidRaw).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
+    if (!extIds || !extIds[cidTrimmed]) throw new Error("Invalid CID");
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
+    externalCid = extIds[cidTrimmed];
     
     // 1. Fetch Data
     const curRes = executeLocalQuery(apiCid, Q0_CURRENCY);
-    const currency = curRes[0]?.customer?.currencyCode || 'EUR';
+    currency = curRes[0]?.customer?.currencyCode || 'EUR';
     
     const resQ1 = executeLocalQuery(apiCid, Q1_FINANCIALS);
     const campaigns = new Map();
@@ -98,7 +103,7 @@ function testUnifiedCampaignReportWithAI() {
         });
     });
 
-    // Merge Targets
+    // Merge Targets (Add-On Logic)
     const resQ2 = executeLocalQuery(apiCid, Q2_TARGETS);
     resQ2.forEach(row => {
         const c = campaigns.get(row.campaign.id);
@@ -140,10 +145,11 @@ function testUnifiedCampaignReportWithAI() {
         }
     });
 
-    // --- 2. PREPARE DATA FOR AI ---
-    const campaignsToAnalyze = [];
+    // --- 2. PREPARE DATA FOR AI & PDF ---
+    const campaignsToAnalyze = []; // For AI (Top 15)
 
     campaigns.forEach(c => {
+        // Common Calcs
         const isEligibleType = TYPES_FOR_CALCULATION.includes(c.type);
         const hasConvData = c.conv > 0;
         let depletion = 0;
@@ -182,64 +188,77 @@ function testUnifiedCampaignReportWithAI() {
         const lostIsBudgetStr = isEligibleType ? (c.lostBudget * 100).toFixed(1) + "%" : "-";
         const lostIsRankStr = isEligibleType ? (c.lostRank * 100).toFixed(1) + "%" : "-";
 
+        // --- BUILD DATA OBJECT (AI FORMAT) ---
+        // Note: Using 'Depletion_Period' here because the Version 3.3 prompt uses that variable name.
+        const campaignObj = {
+            CampaignName: c.name,
+            CampaignType: c.type,
+            Status: statusStr,
+            CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
+            Depletion_Period: depletion.toFixed(1) + "%", 
+            TimeRange: TIME_RANGE,
+            TargetStatus: targetStatus,
+            MissedConversions_Est: missedConvStr,
+            RecommendedBudget_API: recBudgetStr,
+            ImpressionShare: impressionShareStr,
+            LostIS_Budget: lostIsBudgetStr,
+            LostIS_Rank: lostIsRankStr
+        };
+        
+        // PDF Object (Full Data)
+        const pdfObj = {
+            name: c.name, type: c.type, budget: c.budget, cost: c.cost,
+            depletion: depletion, isLimited: c.isLimited, recAmount: c.recAmount,
+            targetStatus: targetStatus, isShare: c.isShare, lostBudget: c.lostBudget,
+            lostRank: c.lostRank, missedConv: numericMissed
+        };
+        allCampaignsData.push(pdfObj);
+
+        // --- FILTER FOR AI ---
         if (c.isLimited || depletion > 85 || numericMissed > 1) {
-            campaignsToAnalyze.push({
-                CampaignName: c.name,
-                CampaignType: c.type,
-                Status: statusStr,
-                CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
-                Depletion_Period: depletion.toFixed(1) + "%", 
-                TimeRange: TIME_RANGE,
-                TargetStatus: targetStatus,
-                MissedConversions_Est: missedConvStr,
-                RecommendedBudget_API: recBudgetStr,
-                
-                // --- ALL IS METRICS NOW INCLUDED ---
-                ImpressionShare: impressionShareStr,
-                LostIS_Budget: lostIsBudgetStr,
-                LostIS_Rank: lostIsRankStr,
-                
-                // Sort Helper (To be removed)
-                _sortKey: c.isLimited ? 2 : (depletion > 95 ? 1 : 0)
-            });
+             const aiObj = { ...campaignObj, _sortKey: c.isLimited ? 2 : (depletion > 95 ? 1 : 0) };
+             campaignsToAnalyze.push(aiObj);
         }
     });
 
-    // --- 3. SAFETY, SORTING & CLEANUP ---
+    // --- 3. AI CALL ---
     
-    // 1. Sortierung (Wichtigste zuerst)
+    // Sort & Limit (Payload Safety)
     campaignsToAnalyze.sort((a, b) => b._sortKey - a._sortKey);
-    
-    // 2. Limitierung auf Top 15
     let campaignsToSend = campaignsToAnalyze.slice(0, 15);
-
-    // 3. BEREINIGUNG: Ausschlie?lich _sortKey entfernen
+    
+    // Cleanup (Remove Helper Key)
     campaignsToSend = campaignsToSend.map(item => {
-        const cleanItem = { ...item }; // Shallow copy
+        const cleanItem = { ...item };
         delete cleanItem._sortKey;
         return cleanItem;
     });
 
     if (campaignsToSend.length > 0) {
-        Logger.log("\n=== DATA SENT TO AI (FULL DATA JSON - Top 15) ===");
-        Logger.log(JSON.stringify(campaignsToSend, null, 2)); 
-        
-        const aiHtml = callGeminiAI_standalone(campaignsToSend);
-        
-        Logger.log("\n=== GEMINI RECOMMENDATION (ROBUST PROMPT) ===\n");
-        Logger.log(aiHtml);
+        Logger.log(`Sending ${campaignsToSend.length} campaigns to AI.`);
+        Logger.log(JSON.stringify(campaignsToSend, null, 2));
+        finalAiHtml = callGeminiAI_standalone(campaignsToSend);
     } else {
-        Logger.log("No campaigns met the criteria for AI analysis.");
+        finalAiHtml = "<ul><li>Alle Kampagnen laufen stabil. Keine unmittelbaren Budget-Anpassungen erforderlich.</li></ul>";
     }
 
   } catch (e) {
-    Logger.log(`\nFATAL ERROR: ${e.message}`);
-    Logger.log(e.stack);
+    Logger.log(`ERROR in AI Analysis: ${e.message}`);
+    finalAiHtml = `<ul><li>Fehler bei der Analyse: ${e.message}</li></ul>`;
   }
+
+  // Return Combined Result
+  return {
+    aiHtml: finalAiHtml,
+    allCampaignsData: allCampaignsData,
+    currency: currency,
+    externalCid: externalCid
+  };
 }
 
 /**
- * Helper: Uses the Robust Prompt.
+ * Helper: Uses the ORIGINAL ROBUST PROMPT (Version 3.3).
+ * Includes the strict 3 bullet point limit.
  */
 function callGeminiAI_standalone(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
@@ -320,7 +339,7 @@ SPRACHREGELUNG (STRIKT):
       text = text.replace(/```html/g, "").replace(/```/g, "").trim();
       return text;
     } else {
-      return `<ul><li><b>KI-Fehler:</b> Keine Antwort generiert. (JSON: ${JSON.stringify(json)})</li></ul>`;
+      return `<ul><li><b>KI-Fehler:</b> Keine Antwort generiert.</li></ul>`;
     }
   } catch (e) {
     return `<ul><li><b>Verbindungsfehler:</b> ${e.message}</li></ul>`;
