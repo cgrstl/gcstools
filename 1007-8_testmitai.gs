@@ -1,8 +1,9 @@
 /**
  * 100-6: Unified Campaign Performance & AI Pitch Generation.
- * - Fetches & Calculates all metrics.
- * - Strict Logic: No Missed Conv calculation for Video/Display/DemandGen.
- * - Strict Logic: No Missed Conv calculation for Search/Pmax/Shopping if Conv = 0.
+ * - Strict Logic:
+ * - Recommended Budget: Shows Value if exists, "Check in Google Ads" if limited but no value, "-" otherwise.
+ * - Missed Conversions: "0.0" if calc is 0, "-" if not eligible.
+ * - Strict type filtering for Video/Display/DemandGen (no IS metrics).
  */
 function testUnifiedCampaignReportWithAI() {
   
@@ -13,19 +14,15 @@ function testUnifiedCampaignReportWithAI() {
   const DATE_START = 'YYYY-MM-DD_START';
   const DATE_END = 'YYYY-MM-DD_END';
   
-  // Alle Typen f?r den Financial Abruf
   const TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
   
-  // Nur diese Typen d?rfen IS-Metriken haben und Missed Conversions berechnen
-  // Video, Display, Demand Gen sind hier explizit NICHT enthalten.
+  // Types eligible for IS Metrics AND Missed Conversion Calculation
   const TYPES_FOR_CALCULATION = ['SEARCH', 'PERFORMANCE_MAX', 'SHOPPING']; 
-  
-  // SQL Filter f?r IS Abruf
   const TYPES_IS_QUERY = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
 
   Logger.log(`\n=== STARTING AI PITCH TEST (CID: ${TEST_CID_RAW}) ===`);
 
-  // --- LOCAL HELPERS (Data Fetching) ---
+  // --- LOCAL HELPERS ---
   const getSafeDateRange = () => {
     const timeZone = "Europe/Dublin"; 
     const endDate = new Date();
@@ -90,14 +87,13 @@ function testUnifiedCampaignReportWithAI() {
     
     Logger.log(`> API CID: ${apiCid}`);
 
-    // 1. Fetch All Data
+    // 1. Fetch Data
     const curRes = executeLocalQuery(apiCid, Q0_CURRENCY, null);
     const currency = curRes[0]?.customer?.currencyCode || 'EUR';
     
     const resQ1 = executeLocalQuery(apiCid, Q1_FINANCIALS, dates);
     const campaigns = new Map();
     
-    // Build Base Map
     resQ1.forEach(row => {
         const reasons = row.campaign.primaryStatusReasons || [];
         const isStatusLimited = reasons.includes('BUDGET_CONSTRAINED');
@@ -161,22 +157,16 @@ function testUnifiedCampaignReportWithAI() {
 
     campaigns.forEach(c => {
         
-        // --- STRICT LOGIC GATES ---
-        
-        // 1. Check Campaign Type (Whitelist: Search, PMax, Shopping ONLY)
-        // This automatically excludes Video, Display, Demand Gen from Calculations
+        // 1. Eligibility Checks
         const isEligibleType = TYPES_FOR_CALCULATION.includes(c.type);
-        
-        // 2. Check Data Integrity (Must have conversions to calc missed opps)
         const hasConvData = c.conv > 0;
 
         // --- CALCULATIONS ---
         let depletion = 0;
         if (c.budget > 0) depletion = ((c.cost / REPORT_DAYS) / c.budget) * 100;
 
-        // Target Status Logic
+        // Target Status
         let targetStatus = "No Target";
-        // Logic: If no conversions, we can't honestly say "Target Missed" for CPA/ROAS.
         if (!hasConvData && (c.targetType === 'ROAS' || c.targetType === 'CPA')) {
             targetStatus = "-";
         } else {
@@ -189,15 +179,11 @@ function testUnifiedCampaignReportWithAI() {
             }
         }
 
-        // Missed Conversions Logic (STRICT)
+        // Missed Conversions Logic
         let missedConvStr = "-";
-        let numericMissed = 0; // For AI trigger logic only
+        let numericMissed = 0;
         
-        // HARD CHECK: 
-        // 1. Must be Eligible Type (No Video/Display) 
-        // 2. AND Must have conversions (No Div/0)
-        // 3. AND Must have IS Lost Budget > 0
-        if (isEligibleType && hasConvData && c.isShare > 0 && c.lostBudget > 0 && c.impr > 0 && c.clicks > 0) {
+        if (isEligibleType && hasConvData && c.isShare > 0 && c.impr > 0 && c.clicks > 0) {
              const totalImpr = c.impr / c.isShare;
              const lostImpr = totalImpr * c.lostBudget;
              const ctr = c.clicks / c.impr;
@@ -208,18 +194,21 @@ function testUnifiedCampaignReportWithAI() {
              missedConvStr = calcMissed.toFixed(1);
         }
 
-        // Rec Budget Logic
-        let recBudgetStr = "N/A";
-        if (c.isLimited) {
-            if (c.recAmount > 0) {
-                recBudgetStr = `${currency} ${c.recAmount.toFixed(2)}`;
-            } else {
-                recBudgetStr = "Check in Google Ads";
-            }
+        // --- BUDGET RECOMMENDATION LOGIC (UPDATED) ---
+        // Default: "-"
+        let recBudgetStr = "-";
+        
+        // Priority 1: Actual API Recommendation exists (wins over everything)
+        if (c.recAmount > 0) {
+             recBudgetStr = `${currency} ${c.recAmount.toFixed(2)}`;
+        } 
+        // Priority 2: Limited status, but NO API value
+        else if (c.isLimited) {
+             recBudgetStr = "Check in Google Ads";
         }
+        // Priority 3: Not limited -> remains "-"
 
         // IS Metrics Strings
-        // If type is not eligible (e.g. Video), we force "-" even if API returned something weird
         const impressionShareStr = isEligibleType ? (c.isShare * 100).toFixed(1) + "%" : "-";
         const lostIsBudgetStr = isEligibleType ? (c.lostBudget * 100).toFixed(1) + "%" : "-";
         const lostIsRankStr = isEligibleType ? (c.lostRank * 100).toFixed(1) + "%" : "-";
@@ -246,7 +235,6 @@ function testUnifiedCampaignReportWithAI() {
     
     // --- 3. CALL AI ---
     if (campaignsToAnalyze.length > 0) {
-        
         Logger.log("\n=== DATA SENT TO AI (JSON) ===");
         Logger.log(JSON.stringify(campaignsToAnalyze, null, 2)); 
 
@@ -285,9 +273,10 @@ function callGeminiAI_(campaignData) {
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
 
     SPRACHREGELUNG & LOGIK:
-    1. **DATEN-INTERPRETATION:** - Wenn ein Wert "-" ist, bedeutet das "Keine Daten verf?gbar". Erfinde hier keine Zahlen.
-       - Wenn MissedConversions_Est = "-", darfst du KEINE entgangenen Conversions erw?hnen.
-       - Bei "Check in Google Ads" (RecommendedBudget): Schreibe "Manuelle Pr?fung empfohlen".
+    1. **DATEN-INTERPRETATION:** - Wert "-": Keine Daten verf?gbar (nicht erw?hnen).
+       - Wert "0.0" (MissedConversions): Bedeutet rechnerisch kein Verlust trotz Limitierung.
+       - Wert "Check in Google Ads": Schreibe "Manuelle Pr?fung empfohlen".
+       - Wert "EUR ...": Dies ist die konkrete Empfehlung, die genannt werden soll.
     2. **PFLICHT-?BERSETZUNGEN:**
        - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
        - "LostIS_Budget" -> "Anteil entgangener Impressionen (Budget)"
@@ -297,7 +286,7 @@ function callGeminiAI_(campaignData) {
     BEISPIEL OUTPUT:
     <ul>
     <li><b>"Search Brand"</b> ist durch das Budget eingeschr?nkt. Es entgehen rechnerisch ca. 5.2 Conversions. Empfehlung: Erh?hung auf <b>EUR 50.00</b>.</li>
-    <li><b>"Video Awareness"</b> (Video) ist stark eingeschr?nkt. Da hier keine Conversion-Daten vorliegen, empfehlen wir, das Budget schrittweise zu erh?hen, um die Reichweite zu testen. System-Empfehlung: Manuelle Pr?fung empfohlen.</li>
+    <li><b>"Shopping Top"</b> ist eingeschr?nkt, jedoch gehen rechnerisch aktuell keine Conversions (0.0) verloren. Wir empfehlen eine manuelle Pr?fung.</li>
     </ul>
   `;
 
