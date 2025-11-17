@@ -1,153 +1,215 @@
 /**
- * @file 04-1_budet.gs (NEU: Version 2.0 - AI Integrated)
+ * @file 04-1_budet.gs (Version 3.3 - Korrigierte Trigger-Logik & KI-Fehlerbehandlung)
  * @description Verarbeitet E-Mail-Entw?rfe f?r Budget-Empfehlungen.
- * Diese Version integriert die KI-Logik aus 100-6, um dynamisch
- * Budget-Analysen von Gemini zu holen und in E-Mail-Entw?rfe einzuf?gen.
+ * Diese Version ist f?r gro?e Auftr?ge (>20) ausgelegt, indem sie
+ * eine Status-Spalte und Zeit-Trigger verwendet, um Timeouts zu vermeiden.
  * @OnlyCurrentDoc
  * @Needs GmailApp
  * @Needs SpreadsheetApp
  * @Needs InternalAdsApp
  * @Needs UrlFetchApp
  * @Needs PropertiesService
+ * @Needs ScriptApp
+ * @Needs LockService
  */
+
+// WIE VIELE ZEILEN PRO 6-MINUTEN-LAUF? (1 Account dauert ca. 30-45s)
+// 3 ist ein sehr sicherer Wert, wie von dir vorgeschlagen.
+const BATCH_SIZE = 3;
+
+// WIE LANGE WARTEN BIS ZUM N?CHSTEN BATCH?
+// 15 Sekunden (statt 1 Minute) ist ein schneller, aber sicherer Wert.
+const TRIGGER_DELAY_SECONDS = 15;
 
 // ================================================================
 // CORE PROCESSING FUNCTION (Called by 04-2_budgetsidebar.html)
 // ================================================================
 
 /**
- * Verarbeitet eine E-Mail-Anfrage aus der Budget-Sidebar.
- * Holt Daten, findet einen Gmail-Entwurf, generiert KI-Inhalte,
- * f?llt Platzhalter und erstellt einen Entwurf.
+ * INITIATOR-Funktion. Wird von der Sidebar aufgerufen.
+ * Speichert die Konfiguration und startet den ersten Batch-Lauf.
  *
  * @param {object} formData Ein Objekt mit den Benutzereingaben aus der Sidebar.
- * @return {object} Ein kategorisiertes Ergebnisobjekt f?r die Sidebar.
+ * @return {object} Ein Ergebnisobjekt f?r die Sidebar (zeigt "Running" an).
  */
 function processEmailRequest(formData) {
-  Logger.log(`--- START processBudgetRecommendationRequest (AI) ---`);
-  Logger.log(`Received formData: ${JSON.stringify(formData)}`);
-
-  const results = {
-    processedRowCount: 0,
-    actionType: 'draft',
-    succeeded: [],
-    failedInput: [],
-    failedProcessing: []
-  };
-
+  Logger.log(`--- START processBudgetRecommendationRequest (AI + PDF) ---`);
+  
   try {
-    // --- 1. SETUP & VALIDATION ---
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getActiveSheet();
+    // 1. Alle alten Trigger l?schen, um Duplikate zu vermeiden
+    // KORREKTUR: Ruft deleteTrigger_ mit dem *Funktionsnamen* auf.
+    deleteTrigger_('runBatchTask_');
 
-    // Spaltenindizes abrufen (verwendet 100-1_helperstools.gs)
+    // 2. FormData f?r den Trigger-Prozess speichern
+    PropertiesService.getScriptProperties().setProperty('budgetBatchFormData', JSON.stringify(formData));
+
+    // 3. Den allerersten Task sofort starten
+    runBatchTask_();
+
+    // 4. An die Sidebar melden, dass der Prozess l?uft
+    Logger.log("Batch process initiated. Returning 'BATCH_RUNNING' to sidebar.");
+    return {
+      status: 'BATCH_RUNNING',
+      succeeded: [1], // Platzhalter, um "Processed 0 rows" in der Sidebar zu verhindern
+      failedInput: [],
+      failedProcessing: [],
+      skipped: []
+    };
+
+  } catch (e) {
+    Logger.log(`FATAL ERROR in processEmailRequest (Initiator): ${e.message} \n Stack: ${e.stack}`);
+    return {
+      status: 'ERROR',
+      processedRowCount: 0,
+      succeeded: [],
+      failedInput: [],
+      failedProcessing: [{ row: 'N/A', recipient: 'N/A', details: `Script Error: ${e.message}` }],
+      skipped: []
+    };
+  }
+}
+
+// ================================================================
+// BATCH PROCESSING FUNCTIONS (Worker & Trigger)
+// ================================================================
+
+/**
+ * WORKER-Funktion. Verarbeitet einen BATCH (z.B. 3 Zeilen) pro Ausf?hrung.
+ * Wird von processEmailRequest() und dann von sich selbst per Trigger aufgerufen.
+ */
+function runBatchTask_() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log("Skipping runBatchTask_: Another instance is already running.");
+    return; 
+  }
+
+  Logger.log("--- runBatchTask_ started ---");
+  let sheet;
+  let statusColIndex = -1;
+  
+  try {
+    // 1. Gespeicherte Konfiguration laden
+    const formDataJson = PropertiesService.getScriptProperties().getProperty('budgetBatchFormData');
+    if (!formDataJson) {
+      Logger.log("Batch task stopped: No formData found in PropertiesService.");
+      deleteTrigger_('runBatchTask_'); // Aufr?umen
+      lock.releaseLock();
+      return;
+    }
+    const formData = JSON.parse(formDataJson);
+
+    // 2. Sheet und Spaltenindizes holen
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    sheet = ss.getActiveSheet();
+    
     const executionColIndex = columnLetterToIndex_(formData.executionCol, sheet);
     const cidColIndex = columnLetterToIndex_(formData.cidCol, sheet);
     const recipientColIndex = columnLetterToIndex_(formData.recipientCol, sheet);
+    statusColIndex = columnLetterToIndex_(formData.statusCol, sheet);
     const ccColIndex = formData.ccCol ? columnLetterToIndex_(formData.ccCol, sheet) : -1;
 
-    if (executionColIndex === -1) throw new Error(`Invalid Trigger Column: ${formData.executionCol}`);
-    if (cidColIndex === -1) throw new Error(`Invalid Google Ads CID Column: ${formData.cidCol}`);
-    if (recipientColIndex === -1) throw new Error(`Invalid Recipient Column: ${formData.recipientCol}`);
-
-    // Standard-Platzhalter-Map erstellen (verwendet 100-1_helperstools.gs)
+    // --- Finde die am weitesten rechts liegende Spalte ---
     const placeholderMap = buildPlaceholderMap_budget(formData, sheet);
+    const placeholderIndices = Object.values(placeholderMap);
+    const allDefinedIndices = [
+      executionColIndex, cidColIndex, recipientColIndex,
+      statusColIndex, ccColIndex, ...placeholderIndices
+    ];
+    const maxDefinedIndex = Math.max(...allDefinedIndices.filter(idx => idx > -1));
+    const requiredWidth = maxDefinedIndex + 1; 
+    
+    // KORREKTUR: Nimm die gr??te Breite (entweder die ben?tigte oder die Max. Spalten)
+    const readWidth = Math.max(requiredWidth, sheet.getMaxColumns());
 
-    // Gmail-Vorlage holen
-    const emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true);
-
-    // Trigger-Zeilen holen (verwendet 100-1_helperstools.gs)
-    const triggeredRows = getTriggeredRows_(sheet, executionColIndex);
-    results.processedRowCount = triggeredRows.length;
-
-    if (triggeredRows.length === 0) {
-      results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: "No rows marked '1' found to process." });
-      return results;
+    // 3. ALLE zu verarbeitenden Zeilen finden
+    Logger.log(`Reading sheet data. Required width: ${requiredWidth}. Actual read width: ${readWidth}.`);
+    
+    // --- KORREKTUR HIER: ---
+    // Ersetze getLastRow() (unzuverl?ssig) durch getMaxRows() (zuverl?ssig)
+    const data = sheet.getRange(1, 1, sheet.getMaxRows(), readWidth).getValues();
+    // --- ENDE KORREKTUR ---
+    
+    const rowsToProcess = []; // Sammelt alle Zeilen, die verarbeitet werden m?ssen
+    for (let i = 0; i < data.length; i++) {
+      const trigger = data[i][executionColIndex]?.toString().trim();
+      const status = data[i][statusColIndex]?.toString().trim() || ''; 
+      
+      if (trigger == '1' && status === '') { // Verwendet == f?r flexiblen Trigger-Vergleich
+        rowsToProcess.push({
+          rowNumber: i + 1, // 1-basiert
+          rowData: data[i]
+        });
+      }
     }
 
-    // Angeh?ngte Dateien aus Base64 konvertieren (falls vorhanden)
+    // 4. Pr?fen, ob Arbeit getan ist
+    if (rowsToProcess.length === 0) {
+      Logger.log("Batch processing complete. No more rows to process.");
+      deleteTrigger_('runBatchTask_'); // KORREKTUR: Funktionsnamen verwenden
+      PropertiesService.getScriptProperties().deleteProperty('budgetBatchFormData');
+      lock.releaseLock();
+      return;
+    }
+
+    Logger.log(`Found ${rowsToProcess.length} total rows remaining. Processing first ${BATCH_SIZE}.`);
+    
+    // 5. Den aktuellen Batch (z.B. die ersten 3) holen
+    const currentBatch = rowsToProcess.slice(0, BATCH_SIZE);
+
+    // Gmail-Vorlage (nur einmal pro Batch holen)
+    const emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true);
+    // Angeh?ngte Dateien (nur einmal pro Batch holen)
     const userAttachments = convertBase64ToBlobs_(formData.attachedFiles || []);
-    Logger.log(`Verarbeite ${userAttachments.length} vom Benutzer hochgeladene Anh?nge.`);
 
-    // --- 2. START ROW ITERATION ---
-    triggeredRows.forEach(triggeredRow => {
-      const sheetRowNumber = triggeredRow.rowNumber;
-      const rowData = triggeredRow.data;
-
-      // Daten f?r diese Zeile extrahieren
-      const cidRaw = rowData[cidColIndex]?.toString().trim() ?? "";
-      const recipientRaw = rowData[recipientColIndex]?.toString().trim() ?? "";
-      const ccRaw = (ccColIndex !== -1 && ccColIndex < rowData.length) ? (rowData[ccColIndex]?.toString().trim() ?? "") : "";
+    // 6. Den BATCH (z.B. 3 Zeilen) verarbeiten
+    for (const item of currentBatch) {
+      const rowNumber = item.rowNumber;
+      const rowData = item.rowData;
 
       try {
-        // --- 2.1 Zeilenvalidierung ---
+        // Zeile "sperren", indem Status gesetzt wird
+        sheet.getRange(rowNumber, statusColIndex + 1).setValue("Processing...");
+
+        // --- Start der Einzelzeilen-Logik ---
+        const cidRaw = rowData[cidColIndex]?.toString().trim() ?? "";
+        const recipientRaw = rowData[recipientColIndex]?.toString().trim() ?? "";
+        const ccRaw = (ccColIndex !== -1 && ccColIndex < rowData.length) ? (rowData[ccColIndex]?.toString().trim() ?? "") : "";
+
         if (!cidRaw) throw new Error("Missing Google Ads Client ID.");
         if (!recipientRaw || !recipientRaw.includes('@')) throw new Error(`Invalid recipient email: "${recipientRaw}"`);
 
-        // --- 2.2 KI-DATEN GENERIEREN (Der neue Schritt) ---
-        Logger.log(`Row ${sheetRowNumber}: Generating AI analysis for CID ${cidRaw} with range ${formData.dateRange}...`);
-        
-        // Bestimme die Anzahl der Tage f?r die Depletion-Berechnung
-        // Wirft einen Fehler, wenn dateRange ung?ltig ist (z.B. "LAST_7_DAYS_INVALID")
         const reportDays = parseInt(formData.dateRange.replace('LAST_', '').replace('_DAYS', ''));
-        if (isNaN(reportDays)) {
-          throw new Error(`Invalid dateRange value received from sidebar: ${formData.dateRange}`);
-        }
+        if (isNaN(reportDays)) throw new Error(`Invalid dateRange value: ${formData.dateRange}`);
         
-        // Rufe die refaktorierte 100-6-Logik auf
-        // GIBT JETZT EIN OBJEKT ZUR?CK: { aiHtml, allCampaignsData, currency, externalCid }
         const analysisResult = getAiBudgetAnalysis_(cidRaw, formData.dateRange, reportDays);
-        Logger.log(`Row ${sheetRowNumber}: AI analysis generated.`);
-
-        // --- 2.3 Alle Platzhalter vorbereiten (OHNE AI-INHALT) ---
         const rowDataForPlaceholders = extractPlaceholderValues_(rowData, placeholderMap);
-        
-        // HINWEIS: Der AI-Inhalt wird NICHT in rowDataForPlaceholders eingef?gt,
-        // da er NICHT escaped werden darf.
 
-        // --- 2.4 E-Mail-Inhalt finalisieren (KORRIGIERTER WORKFLOW) ---
         const finalSubject = fillPlaceholdersInString_(formData.subjectLine, rowDataForPlaceholders);
-        
-        // SCHRITT 1: Zuerst alle "normalen" Platzhalter f?llen (die escaped werden m?ssen)
         let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
         let finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders);
 
-        // SCHRITT 2: JETZT den AI-HTML-Platzhalter manuell ersetzen, *ohne* Escaping
-        // Stellt sicher, dass der rohe HTML-Code von der KI direkt eingef?gt wird.
         finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', analysisResult.aiHtml);
-        
-        // (F?r den Plain-Text-Fallback ersetzen wir ihn auch, aber mit einer einfachen Meldung)
         finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', '(Dynamische Budget-Analyse - siehe HTML-Version)');
 
-        // Alle Anh?nge kombinieren
-        const finalAttachments = [
-          ...emailTemplate.attachments, // Anh?nge aus dem Entwurf
-          ...userAttachments             // Neue Anh?nge aus der Sidebar
-        ];
+        const finalAttachments = [ ...emailTemplate.attachments, ...userAttachments ];
 
-       // --- 2.5 PDF-ANHANG-LOGIK (JETZT AKTIVIERT) ---
         if (formData.enablePdfAttachment) {
-           Logger.log(`Row ${sheetRowNumber}: 'enablePdfAttachment' is true. Generating PDF...`);
-           
-           // Ruft die NEUE, separate Funktion in 04-3_PdfGenerator.gs auf
-           // Wir ?bergeben die *komplette* Datenliste, nicht nur die KI-gefilterte
+           Logger.log(`Row ${rowNumber}: 'enablePdfAttachment' is true. Generating PDF...`);
            const pdfBlob = createBudgetReportPdf_(
              analysisResult.allCampaignsData, 
              analysisResult.currency, 
-             analysisResult.externalCid, // Externe CID f?r den Titel
+             analysisResult.externalCid,
              formData.dateRange
            );
-           
            if (pdfBlob) {
              finalAttachments.push(pdfBlob);
-             Logger.log(`Row ${sheetRowNumber}: PDF Blob successfully attached.`);
+             Logger.log(`Row ${rowNumber}: PDF Blob successfully attached.`);
            } else {
-             Logger.log(`Row ${sheetRowNumber}: PDF Blob generation FAILED.`);
-             // Wir machen trotzdem weiter, nur ohne PDF
+             Logger.log(`Row ${rowNumber}: PDF Blob generation FAILED.`);
            }
         }
 
-        // --- 2.5 Entwurf erstellen ---
         const options = {
           htmlBody: finalBodyHtml,
           cc: ccRaw.replace(/;\s*/g, ',').trim() || undefined,
@@ -160,34 +222,86 @@ function processEmailRequest(formData) {
         };
 
         GmailApp.createDraft(recipientRaw, finalSubject, finalBodyText, options);
-        results.succeeded.push({ row: sheetRowNumber, recipient: recipientRaw, details: `Draft saved successfully with AI content.` });
+        
+        const successMsg = `Draft Saved ${formData.enablePdfAttachment ? '+ PDF' : ''}`;
+        sheet.getRange(rowNumber, statusColIndex + 1).setValue(successMsg);
+        Logger.log(`Row ${rowNumber}: Success. Status set to '${successMsg}'.`);
+        // --- Ende der Einzelzeilen-Logik ---
 
       } catch (e) {
-        const errorMsg = e.message.substring(0, 200);
-        Logger.log(`Row ${sheetRowNumber}: ERROR processing for "${recipientRaw}": ${errorMsg}`);
-        if (e.message.includes("CID") || e.message.includes("Recipient") || e.message.includes("Ads API")) {
-          results.failedInput.push({ row: sheetRowNumber, recipient: recipientRaw, details: errorMsg });
-        } else {
-          results.failedProcessing.push({ row: sheetRowNumber, recipient: recipientRaw, details: errorMsg });
+        // FEHLERBEHANDLUNG f?r die *einzelne Zeile*
+        const errorMsg = e.message.substring(0, 300);
+        Logger.log(`FATAL ERROR processing row ${rowNumber}: ${e.message} \n Stack: ${e.stack}`);
+        if (sheet && rowNumber > -1 && statusColIndex > -1) {
+          sheet.getRange(rowNumber, statusColIndex + 1).setValue(`Error: ${errorMsg}`);
         }
       }
-    }); // --- END ROW ITERATION ---
+    } // --- Ende der Batch-Schleife (z.B. 3 Zeilen) ---
 
-    Logger.log(`Budget processing complete. Summary: Succeeded: ${results.succeeded.length}, FailedInput: ${results.failedInput.length}, FailedProcessing: ${results.failedProcessing.length}`);
-    return results;
+    // 7. N?chsten Trigger erstellen, WENN N?TIG
+    if (rowsToProcess.length > BATCH_SIZE) {
+      // Es gibt noch mehr Arbeit (z.B. 10 gefunden, 3 verarbeitet -> 7 ?brig)
+      createTrigger_('runBatchTask_', TRIGGER_DELAY_SECONDS); // 15 Sekunden
+      Logger.log(`Batch finished. ${rowsToProcess.length - BATCH_SIZE} rows remaining. Setting trigger.`);
+    } else {
+      // Fertig
+      Logger.log("Batch processing complete. All rows processed.");
+      deleteTrigger_('runBatchTask_');
+      PropertiesService.getScriptProperties().deleteProperty('budgetBatchFormData');
+    }
 
   } catch (e) {
-    Logger.log(`FATAL ERROR in processEmailRequest (Budget AI): ${e.message} \n Stack: ${e.stack}`);
-    results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: `Script Error: ${e.message}` });
-    return results;
+    // Globaler Fehler (z.B. Konfiguration laden, Daten lesen)
+    Logger.log(`FATAL ERROR in runBatchTask_ (global): ${e.message} \n Stack: ${e.stack}`);
+    // Wir erstellen einen Trigger, um es erneut zu versuchen, falls es ein tempor?rer Fehler war
+    createTrigger_('runBatchTask_', TRIGGER_DELAY_SECONDS); // 15 Sekunden
+  } finally {
+    lock.releaseLock();
   }
 }
 
+/**
+ * Erstellt einen zeitbasierten Trigger, der eine Funktion in X Sekunden aufruft.
+ * L?scht zuerst alle vorhandenen Trigger mit demselben Namen.
+ * @param {string} functionToRun Die Funktion, die aufgerufen werden soll (z.B. 'runBatchTask_').
+ * @param {number} seconds Die Anzahl der Sekunden, nach denen der Trigger ausl?sen soll.
+ */
+function createTrigger_(functionToRun, seconds) {
+  // Zuerst alle alten Trigger l?schen, die diesen Job ausf?hren
+  deleteTrigger_(functionToRun); // Wichtig: L?sche basierend auf dem Funktionsnamen
+  
+  // Neuen Trigger erstellen
+  ScriptApp.newTrigger(functionToRun)
+      .timeBased()
+      .after(seconds * 1000) // Ge?ndert auf Sekunden
+      .create();
+  Logger.log(`Trigger created to run '${functionToRun}' in ${seconds} seconds.`);
+}
+
+/**
+ * L?scht alle Trigger, die eine bestimmte Funktion ausf?hren.
+ * @param {string} functionName Der Name der Funktion (z.B. 'runBatchTask_').
+ */
+function deleteTrigger_(functionName) {
+  const triggers = ScriptApp.getProjectTriggers();
+  let deleted = false;
+  for (const trigger of triggers) {
+    if (trigger.getHandlerFunction() === functionName) {
+      ScriptApp.deleteTrigger(trigger);
+      deleted = true;
+    }
+  }
+  if(deleted) {
+     Logger.log(`Deleted all existing triggers for function '${functionName}'.`);
+  }
+}
+
+
 // ================================================================
 // LOKALE HILFSFUNKTIONEN (E-Mail & Anh?nge)
+// (Unver?ndert)
 // ================================================================
 
-/** Konvertiert Base64-Dateidaten aus der Sidebar in Blobs */
 function convertBase64ToBlobs_(files) {
   if (!files || files.length === 0) return [];
   const blobs = [];
@@ -206,7 +320,6 @@ function convertBase64ToBlobs_(files) {
   return blobs;
 }
 
-/** Erstellt die BCC-Zeichenkette */
 function buildBccString_budget(toggles) {
   const bccAddresses = [];
   if (toggles.sharedInbox) bccAddresses.push('gcs-sharedinbox@google.com');
@@ -214,12 +327,10 @@ function buildBccString_budget(toggles) {
   return bccAddresses.join(', ') || undefined;
 }
 
-/** Erstellt die Platzhalter-Map */
 function buildPlaceholderMap_budget(formData, sheet) {
   const map = {};
   if (Array.isArray(formData.placeholders)) {
     formData.placeholders.forEach(ph => {
-      // Stellt sicher, dass der Platzhalter-Tag das Format {{name}} hat
       if (ph.name && ph.col && ph.name.startsWith('{{') && ph.name.endsWith('}}')) {
          map[ph.name] = columnLetterToIndex_(ph.col, sheet);
       }
@@ -228,7 +339,6 @@ function buildPlaceholderMap_budget(formData, sheet) {
   return map;
 }
 
-/** Extrahiert Platzhalterwerte aus einer Zeile */
 function extractPlaceholderValues_(rowData, placeholderMap) {
   const values = {};
   for (const name in placeholderMap) {
@@ -236,16 +346,12 @@ function extractPlaceholderValues_(rowData, placeholderMap) {
     if (index > -1 && index < rowData.length) {
       values[name] = rowData[index]?.toString().trim() ?? "";
     } else {
-      values[name] = ""; // Standard-Fallback, falls Spalte nicht existiert
+      values[name] = "";
     }
   }
   return values;
 }
 
-/** * Holt die Gmail-Vorlage.
- * HINWEIS: Diese Funktion ist eine Kopie von der in 01-1_emails.gs,
- * um 04-1 eigenst?ndig zu machen. Zuk?nftige ?nderungen m?ssen evtl. an beiden Orten erfolgen.
- */
 function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
   if (!subject_line || subject_line.trim() === "") {
     throw new Error("Subject line for draft template cannot be empty.");
@@ -273,7 +379,7 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
       const cidHeader = img.getHeaders()['Content-ID'];
       const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
       if (cid) {
-        inlineImages[cid] = img.copyBlob(); // copyBlob() ist sicherer
+        inlineImages[cid] = img.copyBlob();
       } else {
          Logger.log(`Warning: Found inline image named "${img.getName()}" without a Content-ID in draft "${subject_line}".`);
       }
@@ -297,11 +403,8 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
 // INTEGRIERTE AI-LOGIK (Refaktoriert aus 100-6_combined_test.gs)
 // ================================================================
 
-// --- 1. Konstanten & Abfragen (angepasst f?r dynamisches Datum) ---
 const AI_TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
 const AI_TYPES_IS_ELIGIBLE = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
-
-// WICHTIG: Verwendet jetzt 'DURING ${dateRangeString}' statt 'BETWEEN'
 const AI_Q0_CURRENCY = `SELECT customer.currency_code FROM customer`;
 
 const AI_Q1_FINANCIALS = `
@@ -334,34 +437,21 @@ const AI_Q4_BUDGET_RECS = `
     FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.primary_status_reasons CONTAINS ANY ('BUDGET_CONSTRAINED')
   `;
 
-/**
- * F?hrt die Abfrage aus. Ersetzt den Datumsbereich.
- */
 function executeAiQuery_(clientId, query, dateRangeString) {
   let finalQuery = query;
   if (dateRangeString) {
-    // Ersetzt %DATE_RANGE% durch den GAQL-String (z.B. LAST_7_DAYS)
     finalQuery = query.replace('%DATE_RANGE%', dateRangeString);
   }
   const request = { customerId: clientId, query: finalQuery };
-  // Verwendet die globale InternalAdsApp
   const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
   return JSON.parse(responseJson).results || [];
 }
 
-/**
- * Haupt-KI-Funktion, die die Analyse f?r eine CID und einen Datumsbereich durchf?hrt.
- * GIBT JETZT EIN OBJEKT ZUR?CK: { aiHtml, allCampaignsData, currency, externalCid }
- * @param {string} cidRaw Die rohe CID (z.B. 123-456-7890)
- * @param {string} dateRangeString Der GAQL-Datumsstring (z.B. "LAST_7_DAYS")
- * @param {number} reportDays Die Anzahl der Tage (z.B. 7)
- * @return {object} Ein Objekt mit { aiHtml, allCampaignsData, currency, externalCid }
- */
 function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
   Logger.log(`AI Analysis started for CID ${cidRaw}, Range: ${dateRangeString} (${reportDays} days)`);
   
-  let externalCid = cidRaw; // Fallback
-  let currency = 'EUR'; // Fallback
+  let externalCid = cidRaw; 
+  let currency = 'EUR'; 
   
   try {
     const cidTrimmed = String(cidRaw).trim();
@@ -370,7 +460,7 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
         throw new Error(`(AI) CID Lookup Failed for ${cidRaw}`);
     }
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
-    externalCid = extIds[cidTrimmed]; // Speichern f?r PDF-Titel
+    externalCid = extIds[cidTrimmed]; 
 
     // 1. Alle Daten abrufen
     const curRes = executeAiQuery_(apiCid, AI_Q0_CURRENCY, null);
@@ -384,18 +474,17 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
       const reasons = row.campaign.primaryStatusReasons || [];
       const isStatusLimited = reasons.includes('BUDGET_CONSTRAINED');
       campaigns.set(row.campaign.id, {
-        id: row.campaign.id, // ID f?r PDF ben?tigt
+        id: row.campaign.id, 
         name: row.campaign.name, type: row.campaign.advertisingChannelType,
         strategy: row.campaign.biddingStrategyType,
-        budget: parseFloat(row.campaignBudget.amountMicros || 0) / 1000000,
-        cost: parseFloat(row.metrics.costMicros || 0) / 1000000,
+        budget: parseFloat(row.campaignBudget.amount_micros || 0) / 1000000,
+        cost: parseFloat(row.metrics.cost_micros || 0) / 1000000,
         conv: parseFloat(row.metrics.conversions || 0),
-        val: parseFloat(row.metrics.conversionsValue || 0),
+        val: parseFloat(row.metrics.conversions_value || 0),
         clicks: parseFloat(row.metrics.clicks || 0),
         impr: parseFloat(row.metrics.impressions || 0),
         targetType: '-', targetVal: 0, isShare: 0, lostBudget: 0, lostRank: 0,
         recAmount: 0, isLimited: isStatusLimited,
-        // Platzhalter f?r berechnete PDF-Felder
         depletion: 0, targetStatus: 'No Target', missedConv: 0
       });
     });
@@ -428,7 +517,9 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
     const resQ3 = executeAiQuery_(apiCid, AI_Q3_IS_METRICS, dateRangeString);
     resQ3.forEach(row => {
       const c = campaigns.get(row.campaign.id);
-      if (c) {
+      
+      // KORREKTUR (aus deinem Log abgeleitet): Pr?fen, ob row.metrics existiert
+      if (c && row.metrics) {
         c.isShare = parseFloat(row.metrics.searchImpressionShare || 0);
         c.lostBudget = parseFloat(row.metrics.searchBudgetLostImpressionShare || 0);
         c.lostRank = parseFloat(row.metrics.searchRankLostImpressionShare || 0);
@@ -450,17 +541,15 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
     // --- 2. DATEN F?R KI (UND PDF) VORBEREITEN ---
     const campaignsToAnalyze = []; // Nur f?r KI
     
-    // Iteriere ?ber ALLE Kampagnen, um PDF-Daten zu berechnen
     campaigns.forEach(c => {
       let depletion = 0;
-      // WICHTIG: Verwendet die dynamische 'reportDays'-Variable
       if (c.budget > 0) depletion = ((c.cost / reportDays) / c.budget) * 100;
 
       let targetStatus = "No Target";
       if (c.targetType === 'ROAS') {
         const actR = (c.cost > 0) ? (c.val / c.cost) : 0;
         const rAct = Math.round((actR + Number.EPSILON) * 100) / 100;
-        const rTgt = Math.round((c.targetVal + Number.EPSILON) * 100) / 100;
+        const rTgt = Math.round((c.targetVal + Number.EPSILON)*100) / 100;
         targetStatus = (rAct >= rTgt) ? "Target Met" : "Target Missed";
       } else if (c.targetType === 'CPA') {
         const actC = (c.conv > 0) ? (c.cost / c.conv) : 0;
@@ -489,7 +578,7 @@ function getAiBudgetAnalysis_(cidRaw, dateRangeString, reportDays) {
           CampaignName: c.name, CampaignType: c.type,
           Status: c.isLimited ? "Limited by Budget" : "Eligible",
           CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
-          Depletion_Period: depletion.toFixed(1) + "%", // Umbenannt von Depletion7Day
+          Depletion_Period: depletion.toFixed(1) + "%", 
           TargetStatus: targetStatus,
           MissedConversions_Est: missedConv > 0 ? missedConv.toFixed(1) : "None",
           RecommendedBudget_API: c.recAmount > 0 ? `${currency} ${c.recAmount.toFixed(2)}` : "N/A",
@@ -543,8 +632,6 @@ function callGeminiAI_budget(campaignData) {
 
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
   
-  // Note: Umlaute (?, ?, ?) wurden zur Sicherheit als ? (Fragezeichen) kodiert,
-  // dies sollte in einer Live-Umgebung korrekt als UTF-8 behandelt werden.
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
     DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
