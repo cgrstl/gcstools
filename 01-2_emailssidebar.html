@@ -193,26 +193,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
     </div>
   </div>
 
-  <div class="form-group optional-group">
-    <h3>Email Open Tracking (Cooming soon)</h3>
-    <div class="info-note">
-        <p>If enabled, the script will write "Not Opened" in your chosen output column. When the recipient opens the email, this status will update to "Opened" with a timestamp.</p>
-        <p><strong>Important:</strong> To use this, you must deploy the script as a <strong>Web App</strong> with access set to "Anyone, even anonymous".</p>
-    </div>
-    
-    <div id="trackingGroup">
-        <div style="display: flex; align-items: center; margin-bottom: 15px;">
-            <input type="checkbox" id="enableTracking" disabled>
-            <label for="enableTracking" class="inline-label">Enable email open tracking</label>
-        </div>
-
-        <div id="trackingControls" style="display: none;">
-        <label for="trackingOutputCol" class="required">Output column for open status</label>
-        <select id="trackingOutputCol"></select>
-        <p class="info-note">Select an empty column where the tracking status ("Not Opened" / "Opened...") will be written.</p>
-        </div>
-    </div>
-  </div>
   <div class="button-container">
     <button id="sendButton">Start sending</button>
     <button id="draftButton" class="draft-button">Start drafting</button>
@@ -254,10 +234,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
   const phCheckboxes = [1, 2, 3, 4, 5].map(i => document.getElementById(`activatePlaceholder${i}`));
   const phControls = [1, 2, 3, 4, 5].map(i => ({ group: document.getElementById(`placeholder${i}Group`), colSelect: document.getElementById(`placeholder${i}Col`), nameInput: document.getElementById(`placeholder${i}Name`) }));
   const bccSharedInboxCheckbox = document.getElementById('enableBccSharedInbox');
-  // NEW: Add references for tracking elements
-  const enableTrackingCheckbox = document.getElementById('enableTracking');
-  const trackingControls = document.getElementById('trackingControls');
-  const trackingOutputCol = document.getElementById('trackingOutputCol');
 
   /** Updates placeholder states */
   function updatePlaceholderStates() {
@@ -300,9 +276,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
   function handleButtonClick(actionType) {
     if(statusMessage) { statusMessage.textContent = ''; statusMessage.className = ''; }
 
-    // NEW: Get tracking data from the form
-    const isTrackingEnabled = enableTrackingCheckbox.checked;
-    
     const formData = {
       executionCol: document.getElementById('executionCol').value,
       recipientCol: document.getElementById('recipientCol').value,
@@ -310,9 +283,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
       subjectLine: document.getElementById('subjectLine').value.trim(),
       bccSharedInbox: bccSharedInboxCheckbox.checked,
       actionType: actionType,
-      // NEW: Add tracking properties
-      enableTracking: isTrackingEnabled,
-      trackingOutputCol: isTrackingEnabled ? trackingOutputCol.value : null,
       placeholders: []
     };
 
@@ -323,11 +293,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
     if (!formData.executionCol) { errorMessages.push('Select Trigger column.'); }
     if (!formData.recipientCol) { errorMessages.push('Select Recipient email column.'); }
     if (!formData.subjectLine) { errorMessages.push('Enter Subject line (must match Gmail draft).'); }
-
-    // NEW: Add validation for tracking
-    if (isTrackingEnabled && !formData.trackingOutputCol) {
-        errorMessages.push('Select an Output column for tracking.');
-    }
 
     // Validation: Placeholders
     phCheckboxes.forEach((checkbox, index) => {
@@ -353,7 +318,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
         formData.executionCol, 
         formData.recipientCol, 
         formData.ccCol, 
-        formData.trackingOutputCol, // NEW: Add tracking column to the check
         ...activePlaceholdersColumns 
     ];
     const validSelectedColumns = columnsToCheck.filter(col => col && col !== "");
@@ -378,11 +342,11 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
     if (sendButton) sendButton.disabled = true;
     if (draftButton) draftButton.disabled = true;
 
-    // Call backend
+    // Call backend - NOTE THE RENAMED FUNCTION CALL
     google.script.run
         .withSuccessHandler(onSuccess)
         .withFailureHandler(onFailure)
-        .processEmailRequest(formData);
+        .processEmailRequest_emails(formData);
   }
 
   /** Callback for SUCCESSFUL Apps Script execution. */
@@ -451,8 +415,6 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
           ['executionCol', 'recipientCol'].forEach(id => populateDropdown(id, false));
           populateDropdown('ccCol', true);
           [1, 2, 3, 4, 5].forEach(i => populateDropdown(`placeholder${i}Col`, true));
-          // NEW: Populate tracking dropdown
-          populateDropdown('trackingOutputCol', false);
 
           // Add Event Listeners
           if (sendButton) sendButton.addEventListener('click', () => handleButtonClick('send'));
@@ -461,19 +423,9 @@ input[type=checkbox]#enableBccSharedInbox:not(:checked) + label.inline-label {
           if (runAgainButton) runAgainButton.addEventListener('click', showFormView);
           phCheckboxes.forEach(checkbox => { if (checkbox) checkbox.addEventListener('change', updatePlaceholderStates); });
           
-          // NEW: Add listener for the tracking checkbox
-          if (enableTrackingCheckbox) {
-            enableTrackingCheckbox.addEventListener('change', () => {
-              const isEnabled = enableTrackingCheckbox.checked;
-              trackingControls.style.display = isEnabled ? 'block' : 'none';
-            });
-          }
-          
           // Initial UI State
           updatePlaceholderStates();
           showFormView();
-          // NEW: Ensure tracking controls are hidden on load
-          if (trackingControls) trackingControls.style.display = 'none';
           console.log("Email Sender Sidebar UI Initialized");
       } catch (initError) {
           console.error("Error during sidebar initialization:", initError);
