@@ -9,65 +9,24 @@
  */
 
 // ================================================================
-// NEW FUNCTION: WEB APP FOR EMAIL OPEN TRACKING
-// ================================================================
-
-/**
- * Handles GET requests to the deployed script URL. This is the endpoint for the tracking pixel.
- * When an email is opened, this function is called, and it records the open event in the spreadsheet.
- *
- * @param {object} e The event parameter containing request details from the GET request.
- * Expected parameters: e.parameter.row and e.parameter.outputCol.
- * @return {ContentService.TextOutput} A 1x1 transparent GIF image.
- */
-function doGet(e) {
-  const lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(15000); // Wait up to 15 seconds for the lock.
-
-    const params = e.parameter;
-    const row = parseInt(params.row, 10);
-    const outputColLetter = params.outputCol;
-
-    if (!isNaN(row) && outputColLetter) {
-      const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-      
-      // Format the timestamp and create the specific "Opened" status message.
-      const timestamp = new Date();
-      const timezone = Session.getScriptTimeZone(); // Get the spreadsheet's timezone for accuracy
-      const formattedDate = Utilities.formatDate(timestamp, timezone, "MM/dd/yyyy HH:mm");
-      sheet.getRange(`${outputColLetter}${row}`).setValue(`Opened ${formattedDate}`);
-    }
-  } catch (err) {
-    // Log errors but don't let it fail the image response.
-    Logger.log(`Error in doGet tracking: ${err.message}`);
-  } finally {
-    lock.releaseLock();
-  }
-
-  // Return a 1x1 transparent GIF. This is crucial.
-  const gifData = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-  const image = Utilities.base64Decode(gifData);
-  return ContentService.createImageOutput(image, ContentService.MimeType.GIF);
-}
-
-
-// ================================================================
-// UPDATED FUNCTION: EMAIL SENDER CORE LOGIC
+// EMAIL SENDER CORE LOGIC
 // ================================================================
 
 /**
  * Processes an email request from the sidebar.
- * Fetches data, finds a Gmail draft, fills placeholders, adds a tracking pixel if enabled,
+ * Fetches data, finds a Gmail draft, fills placeholders,
  * and then either sends emails or creates drafts.
+ *
+ * RENAMED: processEmailRequest -> processEmailRequest_emails
+ * to avoid conflict with the Budget Tool.
  *
  * @param {object} formData An object containing user selections from the sidebar.
  * @return {object} A categorized results object for the sidebar's onSuccess handler.
  */
-function processEmailRequest(formData) {
-  Logger.log(`--- START processEmailRequest --- Action: ${formData.actionType}`);
+function processEmailRequest_emails(formData) {
+  Logger.log(`--- START processEmailRequest_emails --- Action: ${formData.actionType}`);
   Logger.log(`Received formData for Email Sender: ${JSON.stringify(formData)}`);
-
+  
   const results = {
     processedRowCount: 0,
     actionType: formData.actionType || 'send',
@@ -82,9 +41,8 @@ function processEmailRequest(formData) {
     }
     const subjectLineTemplate = formData.subjectLine;
 
-    // Get tracking info from formData
-    const enableTracking = formData.enableTracking;
-    const trackingOutputCol = formData.trackingOutputCol;
+    // Tracking logic removed for security/policy compliance
+    // const enableTracking = formData.enableTracking; 
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getActiveSheet();
@@ -92,17 +50,13 @@ function processEmailRequest(formData) {
     const executionColIndex = columnLetterToIndex_(formData.executionCol, sheet);
     const recipientColIndex = columnLetterToIndex_(formData.recipientCol, sheet);
     const ccColIndex = formData.ccCol ? columnLetterToIndex_(formData.ccCol, sheet) : -1;
-    const trackingOutputColIndex = enableTracking ? columnLetterToIndex_(trackingOutputCol, sheet) : -1;
-
+    
     const enableBccSharedInbox = formData.bccSharedInbox;
     const sharedInboxBccAddress = 'gcs-sharedinbox@google.com';
-
-    // Added validation for the new tracking column
+    
     if (executionColIndex === -1) throw new Error(`Invalid Trigger Column letter: ${formData.executionCol}. Check if column exists and is accessible.`);
     if (recipientColIndex === -1) throw new Error(`Invalid Recipient Column letter: ${formData.recipientCol}. Check if column exists and is accessible.`);
-    if (enableTracking && trackingOutputColIndex === -1) {
-      throw new Error(`Invalid Tracking Output Column letter: ${trackingOutputCol}. Check if column exists and is accessible.`);
-    }
+    
     if (formData.ccCol && ccColIndex === -1) {
       Logger.log(`Warning: Invalid CC Column letter: ${formData.ccCol}. CC will be ignored. Check if column exists and is accessible.`);
     }
@@ -112,8 +66,7 @@ function processEmailRequest(formData) {
     if (executionColIndex !== -1) usedColumnIndices.add(executionColIndex);
     if (recipientColIndex !== -1) usedColumnIndices.add(recipientColIndex);
     if (ccColIndex !== -1) usedColumnIndices.add(ccColIndex);
-    if (trackingOutputColIndex !== -1) usedColumnIndices.add(trackingOutputColIndex);
-
+    
     if (Array.isArray(formData.placeholders)) {
       formData.placeholders.forEach((ph, idx) => {
         const phColLetter = ph.col;
@@ -131,14 +84,6 @@ function processEmailRequest(formData) {
     }
     Logger.log(`Placeholder Map for Email Sender: ${JSON.stringify(placeholderMap)}`);
 
-    let webAppUrl = null;
-    if (enableTracking) {
-      webAppUrl = ScriptApp.getService().getUrl();
-      if (!webAppUrl) {
-        throw new Error("Email tracking is enabled, but this script has not been deployed as a Web App. Please deploy it to use this feature.");
-      }
-    }
-
     let emailTemplate;
     try {
       Logger.log(`Attempting to find unique Gmail draft with subject: "${subjectLineTemplate}"`);
@@ -152,7 +97,6 @@ function processEmailRequest(formData) {
 
     const triggeredRows = getTriggeredRows_(sheet, executionColIndex);
     results.processedRowCount = triggeredRows.length;
-
     if (triggeredRows.length === 0) {
       Logger.log("No rows marked with '1' found in the sheet. Email processing stopped.");
       results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: "No rows marked '1' found in the sheet to process." });
@@ -169,6 +113,7 @@ function processEmailRequest(formData) {
         results.failedInput.push({ row: sheetRowNumber, recipient: 'N/A', details: errorMsg });
         return;
       }
+     
       const recipientRaw = rowData[recipientColIndex]?.toString().trim() ?? "";
       const ccRaw = (ccColIndex !== -1 && ccColIndex < rowData.length) ? (rowData[ccColIndex]?.toString().trim() ?? "") : "";
 
@@ -190,13 +135,6 @@ function processEmailRequest(formData) {
         const finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders);
         let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
 
-        // Add tracking pixel to the HTML body if enabled
-        if (enableTracking && webAppUrl) {
-          const trackingUrl = `${webAppUrl}?row=${sheetRowNumber}&outputCol=${trackingOutputCol}`;
-          const trackingPixelHtml = `<img src="${trackingUrl}" width="1" height="1" style="display:none;border:0;width:1px;height:1px;" alt="" />`;
-          finalBodyHtml += trackingPixelHtml;
-        }
-
         const options = {
           htmlBody: finalBodyHtml,
           cc: cc || undefined,
@@ -208,11 +146,6 @@ function processEmailRequest(formData) {
         if (results.actionType === 'send') {
           GmailApp.sendEmail(recipient, finalSubject, finalBodyText, options);
           results.succeeded.push({ row: sheetRowNumber, recipient: recipient, details: `Email sent successfully` });
-
-          // Set the initial "Not Opened" status in the sheet for sent emails.
-          if (enableTracking) {
-            sheet.getRange(`${trackingOutputCol}${sheetRowNumber}`).setValue("Not Opened");
-          }
         } else {
           GmailApp.createDraft(recipient, finalSubject, finalBodyText, options);
           results.succeeded.push({ row: sheetRowNumber, recipient: recipient, details: `Draft saved successfully` });
@@ -227,12 +160,10 @@ function processEmailRequest(formData) {
         }
       }
     });
-
     Logger.log(`Email processing complete. Summary: Succeeded: ${results.succeeded.length}, FailedInput: ${results.failedInput.length}, FailedProcessing: ${results.failedProcessing.length}`);
     return results;
-
   } catch (e) {
-    Logger.log(`FATAL ERROR in processEmailRequest: ${e.message} \n Stack: ${e.stack ? e.stack : 'N/A'}`);
+    Logger.log(`FATAL ERROR in processEmailRequest_emails: ${e.message} \n Stack: ${e.stack ? e.stack : 'N/A'}`);
     results.failedProcessing.push({ row: 'N/A', recipient: 'N/A', details: `Script Error: ${e.message}` });
     return results;
   }
@@ -240,17 +171,12 @@ function processEmailRequest(formData) {
 
 
 // ================================================================
-// ORIGINAL HELPER FUNCTION (Must be kept)
+// HELPER FUNCTION (Specific to 01-1)
 // ================================================================
 
 /**
  * Finds a unique Gmail draft matching the subject line and extracts its content.
- * Throws an error if no draft or multiple drafts are found when uniqueness is required.
- *
- * @param {string} subject_line The exact subject line of the draft to find.
- * @param {boolean} [requireUnique=false] If true, throws an error if multiple drafts match.
- * @return {object} An object containing message {text, html}, attachments (Array of Blobs), and inlineImages (Object).
- * @throws {Error} If no draft is found, or if multiple are found and requireUnique is true.
+ * This helper is specific to this email sending script.
  */
 function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
   Logger.log(`Searching for Gmail draft with subject: "${subject_line}" (Require unique: ${requireUnique})`);
@@ -298,7 +224,6 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
     Logger.log(`Could not get inline images for draft "${subject_line}": ${e.message}`);
   }
 
-  Logger.log(`Template extracted. Subject: "${msg.getSubject()}", Attachments: ${attachments.length}, Inline Images: ${Object.keys(inlineImages).length}`);
   return {
     message: {
       text: msg.getPlainBody() || "",
@@ -309,10 +234,8 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
   };
 }
 
-
 // ================================================================
-// GENERAL HELPER FUNCTIONS (Now assumed to be in 100-1_ghelpertools.gs)
+// GENERAL HELPER FUNCTIONS (Now assumed to be in 100-1_helperstools.gs)
 // ================================================================
-// It is assumed that functions like columnLetterToIndex_, fillPlaceholdersInString_,
-// and getTriggeredRows_ are defined in your '100-1_ghelpertools.gs' file.
-// ================================================================
+// NOTE: columnLetterToIndex_, fillPlaceholdersInString_, and getTriggeredRows_ 
+// are expected to be in '100-1_helperstools.gs'.
