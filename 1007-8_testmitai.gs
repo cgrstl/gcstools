@@ -1,53 +1,42 @@
 /**
  * 100-6: Unified Campaign Performance & AI Pitch Generation.
- * - Strict Logic:
- * - Recommended Budget: Shows Value if exists, "Check in Google Ads" if limited but no value, "-" otherwise.
- * - Missed Conversions: "0.0" if calc is 0, "-" if not eligible.
- * - Strict type filtering for Video/Display/DemandGen (no IS metrics).
+ * VERSION: Date-Range Update (Native GAQL).
+ * * CONFIGURATION:
+ * - Set TIME_RANGE to 'LAST_7_DAYS', 'LAST_14_DAYS', or 'LAST_30_DAYS'.
  */
 function testUnifiedCampaignReportWithAI() {
   
-  const TEST_CID_RAW = '14677774'; 
-  const REPORT_DAYS = 7;
+  const TEST_CID_RAW = '6662487282'; 
+  
+  // --- CONFIGURATION ---
+  // Options: 'LAST_7_DAYS', 'LAST_14_DAYS', 'LAST_30_DAYS'
+  const TIME_RANGE = 'LAST_7_DAYS'; 
 
-  // --- CONSTANTS ---
-  const DATE_START = 'YYYY-MM-DD_START';
-  const DATE_END = 'YYYY-MM-DD_END';
-  
+  // --- DYNAMIC CONSTANTS ---
+  // Automatically set the divisor for depletion calculation based on the range
+  let reportDays = 7;
+  if (TIME_RANGE === 'LAST_14_DAYS') reportDays = 14;
+  if (TIME_RANGE === 'LAST_30_DAYS') reportDays = 30;
+
   const TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
-  
-  // Types eligible for IS Metrics AND Missed Conversion Calculation
   const TYPES_FOR_CALCULATION = ['SEARCH', 'PERFORMANCE_MAX', 'SHOPPING']; 
   const TYPES_IS_QUERY = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
 
   Logger.log(`\n=== STARTING AI PITCH TEST (CID: ${TEST_CID_RAW}) ===`);
+  Logger.log(`> Time Range: ${TIME_RANGE} (Calculating Depletion for ${reportDays} days)`);
 
   // --- LOCAL HELPERS ---
-  const getSafeDateRange = () => {
-    const timeZone = "Europe/Dublin"; 
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() - 1); 
-    const startDate = new Date(endDate.getTime());
-    startDate.setDate(endDate.getDate() - 6); 
-    return {
-        start: Utilities.formatDate(startDate, timeZone, 'yyyy-MM-dd'),
-        end: Utilities.formatDate(endDate, timeZone, 'yyyy-MM-dd')
-    };
-  };
-
-  const executeLocalQuery = (clientId, query, dateRange) => {
-    let finalQuery = query;
-    if (dateRange) {
-      finalQuery = query.replace(DATE_START, dateRange.start).replace(DATE_END, dateRange.end);
-    }
-    const request = { customerId: clientId, query: finalQuery };
+  const executeLocalQuery = (clientId, query) => {
+    const request = { customerId: clientId, query: query };
     const responseJson = InternalAdsApp.search(JSON.stringify(request), { version: 'v19' });
     return JSON.parse(responseJson).results || [];
   };
 
-  // --- QUERIES ---
+  // --- QUERIES (Using Native DURING Clause) ---
+  
   const Q0_CURRENCY = `SELECT customer.currency_code FROM customer`;
 
+  // Q1: Financials & Metrics (Needs Date Range)
   const Q1_FINANCIALS = `
     SELECT
       campaign.id, campaign.name, campaign.advertising_channel_type, campaign.bidding_strategy_type,
@@ -56,22 +45,28 @@ function testUnifiedCampaignReportWithAI() {
       metrics.clicks, metrics.impressions
     FROM campaign
     WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${TYPES_ALL})
-    AND segments.date BETWEEN '${DATE_START}' AND '${DATE_END}'
+    AND segments.date DURING ${TIME_RANGE}
   `;
 
+  // Q2: Strategy & Targets (Attribute Level - No Date Range needed usually, represents current settings)
   const Q2_TARGETS = `
-    SELECT campaign.id, campaign.target_cpa.target_cpa_micros, campaign.target_roas.target_roas,
-    campaign.maximize_conversion_value.target_roas, campaign.maximize_conversions.target_cpa_micros
+    SELECT campaign.id, 
+    campaign.target_cpa.target_cpa_micros, 
+    campaign.target_roas.target_roas,
+    campaign.maximize_conversion_value.target_roas, 
+    campaign.maximize_conversions.target_cpa_micros
     FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${TYPES_ALL})
   `;
 
+  // Q3: Impression Share Metrics (Needs Date Range)
   const Q3_IS_METRICS = `
     SELECT campaign.id, metrics.search_impression_share, metrics.search_budget_lost_impression_share,
     metrics.search_rank_lost_impression_share
     FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${TYPES_IS_QUERY})
-    AND segments.date BETWEEN '${DATE_START}' AND '${DATE_END}'
+    AND segments.date DURING ${TIME_RANGE}
   `;
 
+  // Q4: Budget Recommendations (Current Status - No Date Range)
   const Q4_BUDGET_RECS = `
     SELECT campaign.id, campaign_budget.has_recommended_budget, campaign_budget.recommended_budget_amount_micros,
     campaign_budget.recommended_budget_estimated_change_weekly_cost_micros
@@ -83,15 +78,14 @@ function testUnifiedCampaignReportWithAI() {
     const cidTrimmed = String(TEST_CID_RAW).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
     const apiCid = extIds[cidTrimmed].replace(/-/g, '');
-    const dates = getSafeDateRange();
     
     Logger.log(`> API CID: ${apiCid}`);
 
     // 1. Fetch Data
-    const curRes = executeLocalQuery(apiCid, Q0_CURRENCY, null);
+    const curRes = executeLocalQuery(apiCid, Q0_CURRENCY);
     const currency = curRes[0]?.customer?.currencyCode || 'EUR';
     
-    const resQ1 = executeLocalQuery(apiCid, Q1_FINANCIALS, dates);
+    const resQ1 = executeLocalQuery(apiCid, Q1_FINANCIALS);
     const campaigns = new Map();
     
     resQ1.forEach(row => {
@@ -108,29 +102,43 @@ function testUnifiedCampaignReportWithAI() {
             val: parseFloat(row.metrics.conversionsValue || 0),
             clicks: parseFloat(row.metrics.clicks || 0),
             impr: parseFloat(row.metrics.impressions || 0),
-            targetType: '-', targetVal: 0,
+            targetType: '-', targetVal: 0, 
             isShare: 0, lostBudget: 0, lostRank: 0,
             recAmount: 0, isLimited: isStatusLimited
         });
     });
 
     // Merge Targets
-    const resQ2 = executeLocalQuery(apiCid, Q2_TARGETS, null);
+    const resQ2 = executeLocalQuery(apiCid, Q2_TARGETS);
     resQ2.forEach(row => {
         const c = campaigns.get(row.campaign.id);
         if (c) {
-            let roas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
-            if (roas === 0) roas = parseFloat(row.campaign.maximizeConversionValue?.targetRoas || 0);
-            if (roas > 0) { c.targetType = 'ROAS'; c.targetVal = roas; }
+            // --- ROAS DETECTION (Universal) ---
+            const standardRoas = parseFloat(row.campaign.targetRoas?.targetRoas || 0);
+            const maxValRoas = parseFloat(row.campaign.maximizeConversionValue?.targetRoas || 0);
 
-            let cpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0);
-            if (cpa === 0) cpa = parseFloat(row.campaign.maximizeConversions?.targetCpaMicros || 0);
-            if (cpa > 0) { c.targetType = 'CPA'; c.targetVal = cpa / 1000000; }
+            if (standardRoas > 0) {
+                c.targetType = 'ROAS'; c.targetVal = standardRoas; 
+            } else if (maxValRoas > 0) {
+                c.targetType = 'ROAS'; c.targetVal = maxValRoas;
+            }
+
+            // --- CPA DETECTION (Universal) ---
+            if (c.targetType === '-') {
+                const standardCpa = parseFloat(row.campaign.targetCpa?.targetCpaMicros || 0);
+                const maxConvCpa = parseFloat(row.campaign.maximizeConversions?.targetCpaMicros || 0);
+
+                if (standardCpa > 0) {
+                    c.targetType = 'CPA'; c.targetVal = standardCpa / 1000000;
+                } else if (maxConvCpa > 0) {
+                    c.targetType = 'CPA'; c.targetVal = maxConvCpa / 1000000;
+                }
+            }
         }
     });
 
     // Merge IS
-    const resQ3 = executeLocalQuery(apiCid, Q3_IS_METRICS, dates);
+    const resQ3 = executeLocalQuery(apiCid, Q3_IS_METRICS);
     resQ3.forEach(row => {
         const c = campaigns.get(row.campaign.id);
         if (c) {
@@ -141,7 +149,7 @@ function testUnifiedCampaignReportWithAI() {
     });
 
     // Merge Recs
-    const resQ4 = executeLocalQuery(apiCid, Q4_BUDGET_RECS, null);
+    const resQ4 = executeLocalQuery(apiCid, Q4_BUDGET_RECS);
     resQ4.forEach(row => {
         const c = campaigns.get(row.campaign.id);
         if (c) {
@@ -157,19 +165,17 @@ function testUnifiedCampaignReportWithAI() {
 
     campaigns.forEach(c => {
         
-        // 1. Eligibility Checks
         const isEligibleType = TYPES_FOR_CALCULATION.includes(c.type);
         const hasConvData = c.conv > 0;
 
         // --- CALCULATIONS ---
+        // DYNAMIC DEPLETION: Uses 'reportDays' (7, 14, or 30)
         let depletion = 0;
-        if (c.budget > 0) depletion = ((c.cost / REPORT_DAYS) / c.budget) * 100;
+        if (c.budget > 0) depletion = ((c.cost / reportDays) / c.budget) * 100;
 
-        // Target Status
-        let targetStatus = "No Target";
-        if (!hasConvData && (c.targetType === 'ROAS' || c.targetType === 'CPA')) {
-            targetStatus = "-";
-        } else {
+        // --- TARGET STATUS ---
+        let targetStatus = "-";
+        if (hasConvData && c.targetType !== '-') {
             if (c.targetType === 'ROAS') {
                  const actR = (c.cost > 0) ? (c.val / c.cost) : 0;
                  targetStatus = (actR >= c.targetVal) ? "Target Met" : "Target Missed";
@@ -179,7 +185,10 @@ function testUnifiedCampaignReportWithAI() {
             }
         }
 
-        // Missed Conversions Logic
+        // --- STATUS ---
+        const statusStr = c.isLimited ? "Limited by Budget" : "-";
+
+        // --- MISSED CONVERSIONS ---
         let missedConvStr = "-";
         let numericMissed = 0;
         
@@ -194,34 +203,30 @@ function testUnifiedCampaignReportWithAI() {
              missedConvStr = calcMissed.toFixed(1);
         }
 
-        // --- BUDGET RECOMMENDATION LOGIC (UPDATED) ---
-        // Default: "-"
+        // --- RECOMMENDED BUDGET ---
         let recBudgetStr = "-";
-        
-        // Priority 1: Actual API Recommendation exists (wins over everything)
         if (c.recAmount > 0) {
              recBudgetStr = `${currency} ${c.recAmount.toFixed(2)}`;
-        } 
-        // Priority 2: Limited status, but NO API value
-        else if (c.isLimited) {
+        } else if (c.isLimited) {
              recBudgetStr = "Check in Google Ads";
         }
-        // Priority 3: Not limited -> remains "-"
 
-        // IS Metrics Strings
+        // --- IS METRICS ---
         const impressionShareStr = isEligibleType ? (c.isShare * 100).toFixed(1) + "%" : "-";
         const lostIsBudgetStr = isEligibleType ? (c.lostBudget * 100).toFixed(1) + "%" : "-";
         const lostIsRankStr = isEligibleType ? (c.lostRank * 100).toFixed(1) + "%" : "-";
 
         // --- FILTER FOR AI ---
+        // Note: Depletion check now respects the selected time range math
         if (c.isLimited || depletion > 85 || numericMissed > 1) {
             campaignsToAnalyze.push({
                 CampaignName: c.name,
                 CampaignType: c.type,
-                Status: c.isLimited ? "Limited by Budget" : "Eligible",
+                Status: statusStr,
                 CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
-                Depletion7Day: depletion.toFixed(1) + "%",
-                TargetStatus: targetStatus,
+                Depletion: depletion.toFixed(1) + "%", // Removed "7Day" from label as it varies now
+                TimeRange: TIME_RANGE, // Added to JSON so AI knows the context
+                TargetStatus: targetStatus, 
                 ImpressionShare: impressionShareStr, 
                 LostIS_Budget: lostIsBudgetStr,
                 LostIS_Rank: lostIsRankStr,
@@ -273,20 +278,21 @@ function callGeminiAI_(campaignData) {
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
 
     SPRACHREGELUNG & LOGIK:
-    1. **DATEN-INTERPRETATION:** - Wert "-": Keine Daten verf?gbar (nicht erw?hnen).
-       - Wert "0.0" (MissedConversions): Bedeutet rechnerisch kein Verlust trotz Limitierung.
+    1. **DATEN-INTERPRETATION:** - Wenn ein Feld "-" enth?lt: **Ignoriere dieses Feld komplett.**
+       - Wenn Status = "-": Erw?hne den Status nicht (fokussiere dich auf Auslastung oder Empfehlungen).
+       - Wenn TargetStatus = "-": Sprich nicht ?ber Ziele/Targets.
        - Wert "Check in Google Ads": Schreibe "Manuelle Pr?fung empfohlen".
-       - Wert "EUR ...": Dies ist die konkrete Empfehlung, die genannt werden soll.
+       - Achte auf das Feld "TimeRange" in den Daten (z.B. LAST_7_DAYS oder LAST_30_DAYS) und beziehe dich ggf. darauf ("in den letzten 30 Tagen...").
     2. **PFLICHT-?BERSETZUNGEN:**
        - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
        - "LostIS_Budget" -> "Anteil entgangener Impressionen (Budget)"
        - "Target Met" -> "Ziel erreicht"
-    3. **NICHT** verwenden: "Depletion", "Efficiency Scale", "Missed".
+    3. **NICHT** verwenden: "Depletion", "Efficiency Scale", "Missed", "Eligible".
 
     BEISPIEL OUTPUT:
     <ul>
-    <li><b>"Search Brand"</b> ist durch das Budget eingeschr?nkt. Es entgehen rechnerisch ca. 5.2 Conversions. Empfehlung: Erh?hung auf <b>EUR 50.00</b>.</li>
-    <li><b>"Shopping Top"</b> ist eingeschr?nkt, jedoch gehen rechnerisch aktuell keine Conversions (0.0) verloren. Wir empfehlen eine manuelle Pr?fung.</li>
+    <li><b>"Search Brand"</b> ist durch das Budget eingeschr?nkt. In den letzten 7 Tagen entgingen uns rechnerisch ca. 5.2 Conversions. Empfehlung: Erh?hung auf <b>EUR 50.00</b>.</li>
+    <li>Bei <b>"Shopping Top"</b> ist das Budget vollst?ndig ausgelastet. Da kein explizites Ziel (tROAS) definiert ist, empfehlen wir eine manuelle Pr?fung des Budgets.</li>
     </ul>
   `;
 
