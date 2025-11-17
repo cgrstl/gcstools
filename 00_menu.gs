@@ -17,11 +17,11 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   const menu = ui.createMenu('GCS Tools');
   
-  // Existing tools (kept at the start)
+  // Existing tools
   menu.addItem('Send or draft emails', 'showEmailSenderSidebar_');
   menu.addItem('Schedule calls', 'showCallSchedulerSidebar_');
   menu.addItem('Find change history users', 'showFindUsersSidebar_');
-  menu.addItem('Send Budget Recommendations', 'showBudgetRecommendationsSidebar_'); 
+  menu.addItem('Draft Budget Recommendations (Beta)', 'showBudgetRecommendationsSidebar_'); 
 
   menu.addToUi();
 }
@@ -82,14 +82,39 @@ function showFindUsersSidebar_() {
   }
 }
 
-/** Launches the Budget Recommendations sidebar. (NEW/CORRECTED) */
+/** * Launches the Budget Recommendations sidebar. 
+ * (PROTECTED: Requires Beta Key "2009") 
+ */
 function showBudgetRecommendationsSidebar_() {
+  const ui = SpreadsheetApp.getUi();
+
+  // --- BETA KEY CHECK START ---
+  const result = ui.prompt(
+      'Closed Beta Access',
+      "The 'Draft Budget Recommendations' feature is currently in a closed beta phase.\n\nTo access this tool, please enter the allowlisting key:",
+      ui.ButtonSet.OK_CANCEL
+  );
+
+  // Wenn der Nutzer "Cancel" oder das X dr?ckt
+  if (result.getSelectedButton() !== ui.Button.OK) {
+    return;
+  }
+
+  const enteredKey = result.getResponseText().trim();
+
+  // Key ?berpr?fung (Universal Key: 2009)
+  if (enteredKey !== '2009') {
+    ui.alert('Access Denied', 'The key you entered is incorrect.', ui.ButtonSet.OK);
+    return;
+  }
+  // --- BETA KEY CHECK END ---
+
+  // Wenn Key korrekt, Sidebar ?ffnen
   try {
-    // This is the correct launcher pointing to the new HTML file
     const htmlOutput = HtmlService.createHtmlOutputFromFile('04-2_budgetsidebar').setTitle('Send Budget Recommendations');
     SpreadsheetApp.getUi().showSidebar(htmlOutput);
   } catch (e) {
     Logger.log(`Error showing Budget Recommendations sidebar: ${e.message} Stack: ${e.stack}`);
-    SpreadsheetApp.getUi().alert('Could not open the Budget Recommendations sidebar. Please check logs or contact support.');
+    ui.alert('Could not open the Budget Recommendations sidebar. Please check logs or contact support.');
   }
 }
