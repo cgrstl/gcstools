@@ -200,6 +200,12 @@ function testUnifiedCampaignReportWithAI() {
     
     // --- 3. CALL AI ---
     if (campaignsToAnalyze.length > 0) {
+        
+        // >>>>>>>>> MODIFICATION: DETAILED JSON LOGGER <<<<<<<<<<
+        Logger.log("\n=== DATA SENT TO AI (JSON) ===");
+        Logger.log(JSON.stringify(campaignsToAnalyze, null, 2)); 
+        // >>>>>>>>> END MODIFICATION <<<<<<<<<<
+
         const aiResponse = callGeminiAI_(campaignsToAnalyze);
         Logger.log("\n=== GEMINI RECOMMENDATION ===\n");
         Logger.log(aiResponse);
@@ -225,6 +231,7 @@ function callGeminiAI_(campaignData) {
 
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
+  // German Umlaute corrected in prompt for better AI understanding
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
     DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
@@ -238,7 +245,7 @@ function callGeminiAI_(campaignData) {
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
     4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
 
-SPRACHREGELUNG (STRIKT):
+    SPRACHREGELUNG (STRIKT):
     1. **VERBOTENE WORTE (Niemals nutzen):** "Depletion", "Limited", "Budget Limited", "Missed", "Target Met", "Recommendation", "Efficiency Scale".
     2. **PFLICHT-?BERSETZUNGEN:**
        - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
