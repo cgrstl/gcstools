@@ -1,16 +1,13 @@
 /**
- * @file 04-1_budet.gs (Version 4.3 - FIXED: Large File Support via Drive)
+ * @file 04-1_budet.gs (Version 4.4 - Attachment Cleanup Logic)
  * @description Orchestrator f?r Budget-Empfehlungen.
- * - Verarbeitet Batch-Logik (Trigger, Locks, Status-Updates).
- * - Pufferung von Anh?ngen ?ber DriveApp, um 'Argument too large' Fehler zu beheben.
+ * - Verarbeitet Batch-Logik.
+ * - Bereinigt alte Attachments beim Start.
+ * - Pufferung von gro?en Anh?ngen ?ber DriveApp.
  */
 
 const BATCH_SIZE = 3;
 const TRIGGER_DELAY_SECONDS = 15;
-
-// ================================================================
-// CORE PROCESSING FUNCTION
-// ================================================================
 
 function processEmailRequest(formData) {
   Logger.log(`\n=== START processEmailRequest (Orchestrator) ===`);
@@ -20,52 +17,51 @@ function processEmailRequest(formData) {
     
     Logger.log(`> Initializing for Spreadsheet: "${ss.getName()}"`);
 
-    // 1. Alte Trigger bereinigen
+    // 1. Alte Trigger & Daten bereinigen
     deleteTrigger_('executeBudgetRun_');
     
+    // WICHTIG: Alte Formulardaten explizit l?schen, damit keine alten Anh?nge ?berleben
+    PropertiesService.getScriptProperties().deleteProperty('budgetBatchFormData');
+    Logger.log("> Previous session data cleared.");
+    
     // 2. GROSSE DATEIEN BEHANDELN (Drive Pufferung)
-    // Wir laden Dateien tempor?r nach Drive hoch, um PropertiesService nicht zu sprengen.
     if (formData.attachedFiles && formData.attachedFiles.length > 0) {
         Logger.log(`> Offloading ${formData.attachedFiles.length} attachments to Drive temp storage...`);
         const processedFiles = [];
         
         for (const file of formData.attachedFiles) {
-            // Nur wenn Daten vorhanden sind
             if (file.base64data) {
                 const blob = Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename);
-                // Tempor?re Datei im Root erstellen (einfachste Methode, wird sp?ter gel?scht)
                 const driveFile = DriveApp.createFile(blob);
                 
                 processedFiles.push({
                     filename: file.filename,
                     mimeType: file.mimeType,
-                    driveFileId: driveFile.getId(), // Wir speichern NUR die ID
-                    isTemp: true // Markierung zum sp?teren L?schen
+                    driveFileId: driveFile.getId(),
+                    isTemp: true
                 });
                 Logger.log(`  - Uploaded "${file.filename}" to Drive (ID: ${driveFile.getId()})`);
             }
         }
-        // Ersetze die riesigen Daten durch die leichten Metadaten
         formData.attachedFiles = processedFiles;
+    } else {
+        // Wenn KEINE Dateien da sind, explizit leeres Array setzen
+        formData.attachedFiles = [];
     }
 
     // 3. Konfiguration speichern
     formData.spreadsheetId = ss.getId();
     formData.sheetName = sheet.getName();
     
-    // Jetzt ist formData klein genug f?r PropertiesService
     PropertiesService.getScriptProperties().setProperty('budgetBatchFormData', JSON.stringify(formData));
-    Logger.log("> Configuration saved (Attachments offloaded).");
+    Logger.log("> New configuration saved.");
 
     // 4. Starten
     executeBudgetRun_();
 
     return {
       status: 'BATCH_RUNNING',
-      succeeded: [1], 
-      failedInput: [],
-      failedProcessing: [],
-      skipped: []
+      succeeded: [1], failedInput: [], failedProcessing: [], skipped: []
     };
   } catch (e) {
     Logger.log(`FATAL ERROR in processEmailRequest: ${e.message}`);
@@ -85,7 +81,7 @@ function executeBudgetRun_() {
   }
 
   Logger.log("\n--- executeBudgetRun_ (Worker) Started ---");
-  let formData = null; // Scope f?r Cleanup
+  let formData = null; 
 
   try {
     // 1. Config laden
@@ -131,7 +127,6 @@ function executeBudgetRun_() {
     const data = sheet.getRange(1, 1, maxRows, readWidth).getValues();
     const rowsToProcess = [];
 
-    // Scan Loop
     for (let i = 0; i < data.length; i++) {
       const trigger = String(data[i][executionColIndex] || '').trim();
       const status = String(data[i][statusColIndex] || '').trim();
@@ -140,12 +135,12 @@ function executeBudgetRun_() {
       }
     }
 
-    // 4. Batch Check & Cleanup wenn fertig
+    // 4. Batch Check & Cleanup
     if (rowsToProcess.length === 0) {
       Logger.log("=== ALL DONE. Stopping Triggers & Cleaning up. ===");
       
       // CLEANUP: Tempor?re Dateien l?schen
-      if (formData.attachedFiles) {
+      if (formData.attachedFiles && formData.attachedFiles.length > 0) {
           formData.attachedFiles.forEach(f => {
               if (f.driveFileId && f.isTemp) {
                   try { 
@@ -170,13 +165,12 @@ function executeBudgetRun_() {
 
     const emailTemplate = getGmailTemplateFromDrafts__emails(formData.subjectLine, true);
     
-    // ANH?NGE LADEN (Drive Support)
+    // ANH?NGE LADEN
     const userAttachments = [];
     if (formData.attachedFiles && formData.attachedFiles.length > 0) {
         formData.attachedFiles.forEach(file => {
             if (file.driveFileId) {
                 try {
-                    // Lade Blob direkt von Drive
                     const blob = DriveApp.getFileById(file.driveFileId).getBlob();
                     userAttachments.push(blob);
                 } catch(e) {
@@ -201,7 +195,7 @@ function executeBudgetRun_() {
         if (!cidRaw) throw new Error("Missing CID");
         if (!recipientRaw.includes('@')) throw new Error("Invalid Email");
 
-        // KI Analyse
+        // KI Analyse (Single Source of Truth)
         const analysisResult = generateUnifiedAiBudgetAnalysis(cidRaw, formData.dateRange);
 
         // Template
@@ -213,7 +207,7 @@ function executeBudgetRun_() {
         finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', analysisResult.aiHtml);
         finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', 'Siehe HTML-Version f?r AI-Analyse.');
 
-        // Anh?nge zusammenbauen
+        // Anh?nge
         const finalAttachments = [...emailTemplate.attachments, ...userAttachments];
         
         if (formData.enablePdfAttachment) {
@@ -247,28 +241,21 @@ function executeBudgetRun_() {
 
     SpreadsheetApp.flush();
 
-    // 6. Trigger Management
     if (rowsToProcess.length > BATCH_SIZE) {
       createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
     } else {
-        // Cleanup wird im n?chsten Lauf erledigt, wenn rowsToProcess == 0 ist
-        // Aber wir rufen es sofort nochmal auf, um den Cleanup-Block oben zu erreichen
-        createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
+      createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
     }
 
   } catch (e) {
-    Logger.log(`GLOBAL ERROR in executeBudgetRun_: ${e.message}`);
+    Logger.log(`GLOBAL ERROR: ${e.message}`);
     createTrigger_('executeBudgetRun_', TRIGGER_DELAY_SECONDS);
   } finally {
     lock.releaseLock();
   }
 }
 
-
-// ================================================================
-// HELPERS & UTILS
-// ================================================================
-
+// --- Helper Wrappers & Utils ---
 function createTrigger_(func, sec) {
   deleteTrigger_(func);
   ScriptApp.newTrigger(func).timeBased().after(sec * 1000).create();
@@ -310,23 +297,18 @@ function extractPlaceholderValues_(rowData, placeholderMap) {
 }
 
 function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
-  if (!subject_line || subject_line.trim() === "") {
-    throw new Error("Subject line for draft template cannot be empty.");
-  }
+  if (!subject_line || subject_line.trim() === "") throw new Error("Subject line cannot be empty.");
   const drafts = GmailApp.getDrafts();
   const matchingDrafts = drafts.filter(d => d.getMessage().getSubject() === subject_line);
-
   if (matchingDrafts.length === 0) throw new Error(`No Gmail draft found with subject: "${subject_line}"`);
-  if (requireUnique && matchingDrafts.length > 1) throw new Error(`Multiple Gmail drafts found with subject: "${subject_line}".`);
+  if (requireUnique && matchingDrafts.length > 1) throw new Error(`Multiple Gmail drafts found.`);
 
   const msg = matchingDrafts[0].getMessage();
   let attachments = [];
   let inlineImages = {};
-
   try {
     attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
   } catch(e) { Logger.log(`Error attachments: ${e.message}`); }
-
   try {
     const rawInline = msg.getAttachments({ includeInlineImages: true, includeAttachments: false });
     rawInline.forEach(img => {
@@ -344,7 +326,6 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
 }
 
 function convertBase64ToBlobs_(files) {
-    // Placeholder f?r Kompatibilit?t, wird aber durch die neue Drive-Logik ersetzt/umgangen
     if (!files || files.length === 0) return [];
     return files.map(file => Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename));
 }
