@@ -1,7 +1,10 @@
 /**
  * 100-6: Unified Campaign Performance & AI Pitch Generation.
- * VERSION: "CLEAN JSON EDITION"
- * * FIX: Removed internal helper '_sortKey' from final JSON output.
+ * VERSION: "FULL DATA INTEGRITY"
+ * * FIXES:
+ * 1. All Metrics included: ImpressionShare, LostIS_Rank, TimeRange are back in the JSON.
+ * 2. Sort Key Cleanup: Only _sortKey is removed before sending.
+ * 3. Logic: Strict Golden Master Logic + Robust Prompt.
  */
 function testUnifiedCampaignReportWithAI() {
   
@@ -186,18 +189,23 @@ function testUnifiedCampaignReportWithAI() {
                 Status: statusStr,
                 CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
                 Depletion_Period: depletion.toFixed(1) + "%", 
+                TimeRange: TIME_RANGE,
                 TargetStatus: targetStatus,
                 MissedConversions_Est: missedConvStr,
                 RecommendedBudget_API: recBudgetStr,
-                LostIS_Budget: lostIsBudgetStr,
                 
-                // Sort Helper (Will be removed before sending)
+                // --- ALL IS METRICS NOW INCLUDED ---
+                ImpressionShare: impressionShareStr,
+                LostIS_Budget: lostIsBudgetStr,
+                LostIS_Rank: lostIsRankStr,
+                
+                // Sort Helper (To be removed)
                 _sortKey: c.isLimited ? 2 : (depletion > 95 ? 1 : 0)
             });
         }
     });
 
-    // --- 3. SAFETY & CLEANUP ---
+    // --- 3. SAFETY, SORTING & CLEANUP ---
     
     // 1. Sortierung (Wichtigste zuerst)
     campaignsToAnalyze.sort((a, b) => b._sortKey - a._sortKey);
@@ -205,19 +213,20 @@ function testUnifiedCampaignReportWithAI() {
     // 2. Limitierung auf Top 15
     let campaignsToSend = campaignsToAnalyze.slice(0, 15);
 
-    // 3. BEREINIGUNG: Sort Key entfernen f?r sauberes JSON
+    // 3. BEREINIGUNG: Ausschlie?lich _sortKey entfernen
     campaignsToSend = campaignsToSend.map(item => {
-        delete item._sortKey;
-        return item;
+        const cleanItem = { ...item }; // Shallow copy
+        delete cleanItem._sortKey;
+        return cleanItem;
     });
 
     if (campaignsToSend.length > 0) {
-        Logger.log("\n=== DATA SENT TO AI (CLEAN JSON - Top 15) ===");
+        Logger.log("\n=== DATA SENT TO AI (FULL DATA JSON - Top 15) ===");
         Logger.log(JSON.stringify(campaignsToSend, null, 2)); 
         
         const aiHtml = callGeminiAI_standalone(campaignsToSend);
         
-        Logger.log("\n=== GEMINI RECOMMENDATION (FINAL) ===\n");
+        Logger.log("\n=== GEMINI RECOMMENDATION (ROBUST PROMPT) ===\n");
         Logger.log(aiHtml);
     } else {
         Logger.log("No campaigns met the criteria for AI analysis.");
