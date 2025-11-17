@@ -10,7 +10,7 @@ function testUnifiedCampaignReportWithAI() {
   
   // --- CONFIGURATION ---
   // Options: 'LAST_7_DAYS', 'LAST_14_DAYS', 'LAST_30_DAYS'
-  const TIME_RANGE = 'LAST_7_DAYS'; 
+  const TIME_RANGE = 'LAST_30_DAYS'; 
 
   // --- DYNAMIC CONSTANTS ---
   // Automatically set the divisor for depletion calculation based on the range
