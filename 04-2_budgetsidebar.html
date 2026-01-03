@@ -304,9 +304,17 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
 </div>
 
 <div id="loadingState" style="display: none;">
-  <p><strong id="loadingActionText">Processing...</strong><strong> Please wait.</strong></p>
+  <div style="background-color: #fff3cd; color: #856404; padding: 15px; border: 1px solid #ffeeba; border-radius: 5px; margin-bottom: 20px; text-align: left;">
+      <h4 style="margin-top: 0; margin-bottom: 10px; color: #856404;">?? Do not close this sidebar!</h4>
+      <p style="margin: 0; font-size: 13px;">
+          The script is processing rows in batches. If you close this sidebar, the process will stop immediately.<br><br>
+          You can minimize the browser window, but please keep this sidebar open until you see the "All Batches Complete" message.
+      </p>
+  </div>
+  
+  <p><strong id="loadingActionText">Processing...</strong></p>
   <div class="loader"></div>
-  <p><small id="loadingSubText">This may take a few moments depending on the number of rows being processed.</small></p>
+  <p><small id="loadingSubText">Initializing...</small></p>
 </div>
 
 <div id="resultsView" style="display: none;">
