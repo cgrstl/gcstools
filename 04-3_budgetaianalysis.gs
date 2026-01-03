@@ -1,8 +1,6 @@
 /**
  * 100-6 / 1007-8: Unified Campaign Performance & AI Pitch Generation.
- * VERSION: "API SAFETY FIX + SHOPPING REMEDY COMPLIANCE"
- * * FIX: Added safety checks for 'row.metrics' to prevent crashes.
- * * COMPLIANCE: Added filter for Shopping/PMax campaigns targeting EEA/UK/CH.
+ * VERSION: "API SAFETY FIX + SHOPPING REMEDY COMPLIANCE + FALLBACK LOGIC"
  */
 function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   
@@ -16,10 +14,6 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   const TYPES_IS_QUERY = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
 
   // --- COMPLIANCE: List of EEA, UK, and CH Country IDs ---
-  // Austria, Belgium, Bulgaria, Croatia, Cyprus, Czechia, Denmark, Estonia, Finland, France,
-  // Germany, Greece, Hungary, Ireland, Italy, Latvia, Lithuania, Luxembourg, Malta, Netherlands,
-  // Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden, UK (2826), Switzerland (2756),
-  // Norway (2578), Iceland (2352), Liechtenstein (2438).
   const REMEDY_COUNTRY_IDS = [
     2040, 2056, 2100, 2191, 2196, 2203, 2208, 2233, 2246, 2250, 
     2276, 2300, 2348, 2372, 2380, 2428, 2440, 2442, 2470, 2528, 
@@ -31,7 +25,7 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
 
   let externalCid = cidRaw;
   let currency = 'EUR';
-  let finalAiHtml = "<ul><li>Keine aktiven Kampagnendaten gefunden.</li></ul>";
+  let finalAiHtml = "<ul><li>No relevant recommendations found.</li></ul>"; // Default Fallback
   
   // EINZIGE Liste f?r ALLE Kampagnen (f?r PDF)
   const allCampaignsData = []; 
@@ -50,9 +44,7 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   const Q4_BUDGET_RECS = `SELECT campaign.id, campaign_budget.has_recommended_budget, campaign_budget.recommended_budget_amount_micros, campaign_budget.recommended_budget_estimated_change_weekly_cost_micros FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.primary_status_reasons CONTAINS ANY ('BUDGET_CONSTRAINED')`;
 
   // --- COMPLIANCE QUERIES ---
-  // 1. Identify PMax campaigns that have a Merchant Center ID linked (Targeting Feed)
   const Q_PMAX_WITH_FEED = `SELECT campaign.id FROM campaign WHERE campaign.advertising_channel_type = 'PERFORMANCE_MAX' AND campaign.shopping_setting.merchant_id IS NOT NULL`;
-  // 2. Identify Campaigns targeting restricted locations
   const Q_LOCATIONS = `SELECT campaign.id, campaign_criterion.location.geo_target_constant FROM campaign_criterion WHERE campaign_criterion.type = 'LOCATION' AND campaign_criterion.negative = FALSE AND campaign.status = 'ENABLED'`;
 
   try {
@@ -69,15 +61,12 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
     const pmaxFeedSet = new Set();
     const campaignsTargetingRemedy = new Set();
 
-    // Fetch PMax Feeds
     const feedRes = executeLocalQuery(apiCid, Q_PMAX_WITH_FEED);
     feedRes.forEach(row => pmaxFeedSet.add(row.campaign.id));
 
-    // Fetch Locations and check against REMEDY_COUNTRY_IDS
     const locRes = executeLocalQuery(apiCid, Q_LOCATIONS);
     locRes.forEach(row => {
         if(row.campaignCriterion && row.campaignCriterion.location && row.campaignCriterion.location.geoTargetConstant) {
-            // geoTargetConstant format: "geoTargetConstants/2276"
             const geoId = parseInt(row.campaignCriterion.location.geoTargetConstant.split('/').pop());
             if (REMEDY_COUNTRY_IDS.includes(geoId)) {
                 campaignsTargetingRemedy.add(row.campaign.id);
@@ -93,21 +82,15 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
         const cType = row.campaign.advertisingChannelType;
 
         // --- COMPLIANCE FILTER LOGIC ---
-        // We exclude if:
-        // 1. It is SHOPPING OR (PMAX with Feed)
-        // 2. AND it targets a Remedy Country
         const isShoppingOrFeedPmax = (cType === 'SHOPPING') || (cType === 'PERFORMANCE_MAX' && pmaxFeedSet.has(cId));
         
         if (isShoppingOrFeedPmax && campaignsTargetingRemedy.has(cId)) {
-            // Skip this campaign completely
-            return; 
+            return; // Skip this campaign
         }
-        // -------------------------------
 
         const reasons = row.campaign.primaryStatusReasons || [];
         const isStatusLimited = reasons.includes('BUDGET_CONSTRAINED');
         
-        // SAFETY CHECK: Ensure metrics object exists
         const metrics = row.metrics || {};
         const campaignBudget = row.campaignBudget || {};
 
@@ -143,11 +126,10 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
         }
     });
 
-    // Merge IS (HIER WAR DER FEHLER)
+    // Merge IS
     const resQ3 = executeLocalQuery(apiCid, Q3_IS_METRICS);
     resQ3.forEach(row => {
         const c = campaigns.get(row.campaign.id);
-        // FIX: Pr?fen ob row.metrics existiert!
         if (c && row.metrics) {
             c.isShare = parseFloat(row.metrics.searchImpressionShare || 0);
             c.lostBudget = parseFloat(row.metrics.searchBudgetLostImpressionShare || 0);
@@ -209,6 +191,7 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
             CampaignName: c.name,
             CampaignType: c.type,
             Status: statusStr,
+            Conversions: c.conv.toFixed(1), // NEU: F?r Relevanz-Check durch KI
             CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
             Depletion_Period: depletion.toFixed(1) + "%", 
             TimeRange: TIME_RANGE,
@@ -239,7 +222,7 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
         return scoreB - scoreA;
     });
     
-    // B. CLEANUP: Entferne die internen Helper-Keys aus ALLEN Objekten
+    // Cleanup internal keys
     allCampaignsData.forEach(item => {
         delete item._isLimited;
         delete item._depletionVal;
@@ -253,12 +236,13 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
         Logger.log(JSON.stringify(campaignsToSend, null, 2)); 
         finalAiHtml = callGeminiAI_standalone(campaignsToSend);
     } else {
-        finalAiHtml = "<ul><li>Alle Kampagnen laufen stabil. Keine unmittelbaren Budget-Anpassungen erforderlich.</li></ul>";
+        // --- NEW STANDARD FALLBACK MESSAGE ---
+        finalAiHtml = "<ul><li>No relevant recommendations found.</li></ul>";
     }
 
   } catch (e) {
     Logger.log(`ERROR in AI Analysis: ${e.message}`);
-    finalAiHtml = `<ul><li>Fehler bei der Analyse: ${e.message}</li></ul>`;
+    finalAiHtml = `<ul><li>Error during analysis: ${e.message}</li></ul>`;
   }
 
   return {
@@ -273,6 +257,7 @@ function callGeminiAI_standalone(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!API_KEY) return "<ul><li><b>Fehler:</b> API-Schl?ssel fehlt.</li></ul>";
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+  
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
     DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
@@ -283,11 +268,12 @@ function callGeminiAI_standalone(campaignData) {
     3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
     4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
 
-SPRACHREGELUNG (STRIKT):
+    SPRACHREGELUNG (STRIKT):
     1. **VERBOTENE WORTE (Niemals nutzen):** "Depletion", "Limited", "Budget Limited", "Missed", "Target Met", "Recommendation", "Efficiency Scale".
     2. **PFLICHT-?BERSETZUNGEN:**
        - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
        - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
+       - "LostIS_Rank" -> "Anteil entgangener Impressionen aufgrund des Ranges"
        - "Target Met" -> "Ziel erreicht"
        - "RecommendedBudget" -> "empfohlene Tagesbudget"
        - "Depletion_Period" -> "Budget-Aussch?pfung" oder "Auslastung"
@@ -299,25 +285,39 @@ SPRACHREGELUNG (STRIKT):
     3. **Keine Redundanz:** Schreibe NIEMALS "Wir verlieren entgangene Conversions". Das ist doppelt gemoppelt. 
        - RICHTIG: "Uns entgehen rechnerisch ca. [X] Conversions" oder "Das ungenutzte Potenzial liegt bei [X] Conversions".
     4. **Tonalit?t:** Neutral, analytisch, l?sungsorientiert.
+    5. **Intelligenter Relevanz-Filter (WICHTIG):** - Setze "MissedConversions_Est" ins Verh?ltnis zu den erzielten "Conversions".
+       - IGNORIERE Bagatell-Werte (z.B. 0.5 entgangen bei 100 erzielt -> irrelevant).
+       - Erw?hne entgangene Conversions NUR, wenn sie signifikant sind (z.B. > 10% Zuwachs-Potenzial ODER absolute Menge > 3).
 
-    ANALYSE-PRIORIT?TEN:
+    ANALYSE-PRIORIT?TEN (Reihenfolge strikt beachten):
     
-    1. **Prio 1 (Effizienz-Skalierung):**
+    1. **Prio 1 (Effizienz-Skalierung - Kritisch):**
        - Wenn: TargetStatus = "Target Met" UND (Status = "Limited by Budget" ODER Depletion_Period > 90%).
-       - Strategie: Betone, dass die Kampagne effizient l?uft, aber vom Budget limitiert wird. Nenne die "MissedConversions_Est" und den "LostIS_Budget". Schlage die Erh?hung auf das <b>[RecommendedBudget_API]</b> vor (falls "N/A", schlage eine schrittweise Erh?hung vor).
+       - Strategie: Betone, dass die Kampagne effizient l?uft, aber vom Budget limitiert wird. Nenne die "MissedConversions_Est" (unter Beachtung des Relevanz-Filters) und den "LostIS_Budget". Schlage die Erh?hung auf das <b>[RecommendedBudget_API]</b> vor (falls "N/A", schlage eine schrittweise Erh?hung vor).
 
-    2. **Prio 2 (Wachstums-Potenzial):**
+    2. **Prio 2 (Wachstums-Potenzial bei Limitierung):**
        - Wenn: TargetStatus = "No Target" UND Status = "Limited by Budget".
        - Strategie: Weise auf die starke Nachfrage hin, die das aktuelle Budget ?bersteigt. Empfiehl einen Test mit h?herem Budget, um das Volumen zu pr?fen.
 
     3. **Prio 3 (Kapazit?ts-Warnung):**
-       - Wenn: Depletion_Period > 85% (aber nicht "Limited by Budget").
+       - Wenn: Depletion_Period > 80% (aber nicht "Limited by Budget").
        - Strategie: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
+
+    4. **Prio 4 (Investitions-Chance / Skalierung - FALLBACK):**
+       - Wenn: KEINE der oben genannten Bedingungen (Prio 1-3) zutrifft (d.h. das Konto l?uft stabil ohne Limitierung und ohne hohe Auslastung).
+       - Strategie: Suche nach Kampagnen mit Potenzial ("Target Met" oder stabil).
+       - **WICHTIG (Rank-Verluste):** Pr?fe den "LostIS_Rank". Wenn dieser hoch ist (> 25%), gehen Conversions nicht durch fehlendes Budget, sondern durch zu niedrige Gebote verloren.
+       - Empfehlung: Schlage vor, das <b>vorhandene, freie Budget</b> offensiver zu nutzen. Empfiehl eine Anpassung der Zielvorgaben (z.B. ROAS leicht senken oder CPA erh?hen), um in aggressiveren Auktionen mehr Sichtbarkeit zu gewinnen (Angriff auf den "LostIS_Rank").
 
     BEISPIEL OUTPUT (Stil-Referenz):
     <ul>
-    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, sto?en jedoch t?glich an ihr Limit. Aktuell entgehen uns hierdurch rechnerisch ca. 20 Conversions pro Woche (Anteil entgangener Impressionen aufgrund des Budgets: 52%). Um dieses Potenzial voll auszusch?pfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
+    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, sto?en jedoch t?glich an ihr Limit. Aktuell entgehen uns hierdurch ein signifikantes Volumen von ca. 20 Conversions pro Woche. Um dieses Potenzial voll auszusch?pfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
     <li>Bei <b>"Demand Gen"</b> sehen wir eine extrem hohe Nachfrage, die das Budget von <b>EUR 200.00</b> vollst?ndig auslastet. Eine Anpassung w?rde helfen, die Sichtbarkeit an starken Tagen zu sichern.</li>
+    </ul>
+    
+    ODER (Falls Prio 4 greift - Stabil aber ungenutzt):
+    <ul>
+    <li>Die Kampagnen <b>"Performance Max"</b> und <b>"Search Brand"</b> laufen stabil, sch?pfen ihr Tagesbudget jedoch derzeit nicht aus. Wir sehen jedoch Potenziale im Auktionsumfeld (Lost IS Rank: 45%). Um das Wachstum anzukurbeln, empfehlen wir eine offensivere Investitionsstrategie: Durch eine Anpassung der Zielvorgaben (z.B. Senkung des ROAS-Ziels) k?nnten wir das bereits vorhandene Budget nutzen, um zus?tzliche Marktanteile zu gewinnen.</li>
     </ul>`;
 
   const payload = { contents: [{ parts: [{ text: prompt }] }] };
