@@ -179,11 +179,10 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     <h3>Core settings</h3>
     <label for="executionCol" class="required">Trigger column</label>
     <select id="executionCol"></select>
-    <p class="info-note">Select the column containing the trigger value '1'. Rows marked with '1' will be processed.</p>
+    <p class="info-note">Select the column containing the trigger value '1'. Rows marked with '1' will be processed; other values or empty cells will be ignored.</p>
     
-    <label for="cidCol" class="required">Google Ads CID column</label>
+    <label for="cidCol" class="required">Internal CID column</label>
     <select id="cidCol"></select>
-    <p class="info-note">Select the column containing the client's 10-digit Google Ads ID (e.g., <code>123-456-7890</code>).</p>
     
     <label for="recipientCol" class="required">Recipient email column</label>
     <select id="recipientCol"></select>
@@ -192,12 +191,12 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     <label for="statusCol" class="required">Status column</label>
     <select id="statusCol"></select>
     <p class="info-note">
-      To process many accounts (e.g., >20) without timing out, this script runs in batches. This column is used to track the status (e.g., "Draft Saved") for each row. Please select an empty column.
+      To process large lists (>20 accounts) without timeouts, this script runs in batches. Please select an empty column to track the status (e.g., 'Processing', 'Draft Saved'). Important: The script only processes rows where this status column is empty. To re-run a CID, simply delete its status or select a new empty column.
     </p>
     
     <label for="subjectLine" class="required">Subject line of Gmail draft</label>
     <input type="text" id="subjectLine" placeholder="Enter exact draft subject line">
-    <p class="info-note">First, create an email draft in your Gmail 'Drafts' folder. Enter the <strong>exact subject line</strong> of that draft here. The script will use its body as the template.</p>
+    <p class="info-note">First, create an email draft in your Gmail 'Drafts' folder. Enter the <strong>exact subject line</strong> of that draft here. The script will use its body as the template. You can use placeholders defined below in the draft's subject line.</p>
 
     <label for="ccCol" class="bold-label">Recipient email CC column</label>
     <select id="ccCol"><option value="" selected>None</option></select>
@@ -214,9 +213,9 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
   </div>
 
   <div class="form-group optional-group">
-    <h3>Report Configuration</h3>
-    <p class="info-note placeholder-note"> 
-        Configure data generation options for the email content and attachments.
+    <h3>Budget Recommendation Configuration</h3>
+     <p class="info-note placeholder-note"> 
+        This tool generates a bullet-point list of budget recommendations based on real-time performance data for the selected CID. In your Email draft, include the placeholder {{budget_recommendation}} where you want the list to appear. Please select the time range for the performance data below. Note that to comply with the EC Shopping Remedy, Shopping and PMax (Feed) campaigns targeting EEA countries, the UK, or Switzerland will be automatically excluded from the analysis.
     </p>
 
     <div class="lookback-group">
@@ -232,14 +231,14 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
     <div id="pdfAttachmentGroup" style="margin-bottom: 15px;"> 
         <div style="display: flex; align-items: center;">
             <input type="checkbox" id="enablePdfAttachment">
-            <label for="enablePdfAttachment" class="inline-label">Attach PDF Campaign Budget Report</label>
+            <label for="enablePdfAttachment" class="inline-label">Attach PDF Campaign Budget Report to Email draft</label>
         </div>
     </div>
   </div>
   
   <div class="form-group optional-group">
     <h3>Placeholders</h3>
-    <p class="info-note">Define placeholders like <code>{{ContactName}}</code> to personalize your email. Enter the tag below and select the corresponding column. Note: Dynamic data blocks for budget data will be inserted using specific placeholders in your draft (e.g., <code>[BUDGET_TABLE]</code>).</p>
+    <p class="info-note">Define placeholders like {{ContactName}} to personalize your email. Enter the tag below and select the corresponding column. Only perfectly matching tags in your Gmail draft will be replaced.</p>
     
     <div id="placeholder1Group" class="placeholder-group inactive">
         <div class="placeholder-activation">
@@ -297,16 +296,6 @@ input[type=checkbox]:disabled + label.inline-label { color: #999; font-weight: n
         </div>
     </div>
   </div>
-  
-  <div class="form-group optional-group">
-    <h3>Attach File(s) to Email draft</h3>
-    <p class="info-note">You can attach additional files (e.g., reports, images) to the email draft. Files are uploaded when you click "Start drafting".</p>
-    
-    <div id="dropZone" class="drop-zone">
-      <input type="file" id="fileInput" multiple>
-      <p id="dropZoneText">Drag & drop files here, or click to select</p>
-    </div>
-    <ul id="fileList"></ul> </div>
   
   <div class="button-container">
     <button id="draftButton" class="draft-button">Start drafting</button>
