@@ -224,30 +224,6 @@ function extractPlaceholderValues_(rowData, placeholderMap) {
   return values;
 }
 
-function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
-  const drafts = GmailApp.getDrafts();
-  const matchingDrafts = drafts.filter(d => d.getMessage().getSubject() === subject_line);
-  if (matchingDrafts.length === 0) throw new Error(`No draft found: "${subject_line}"`);
-  
-  const msg = matchingDrafts[0].getMessage();
-  let attachments = [];
-  let inlineImages = {};
-  try { attachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true }); } catch(e){}
-  try { 
-      const raw = msg.getAttachments({ includeInlineImages: true, includeAttachments: false }); 
-      raw.forEach(img => {
-          const cid = img.getHeaders()['Content-ID']?.replace(/[<>]/g, "");
-          if(cid) inlineImages[cid] = img.copyBlob();
-      });
-  } catch(e){}
-
-  return {
-    message: { text: msg.getPlainBody() || "", html: msg.getBody() || "" },
-    attachments: attachments,
-    inlineImages: inlineImages
-  };
-}
-
 // ANMERKUNG:
 // Die Funktionen columnLetterToIndex_, generateUnifiedAiBudgetAnalysis, 
 // createBudgetReportPdf_ und fillPlaceholdersInString_
