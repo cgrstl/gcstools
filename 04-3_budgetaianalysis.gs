@@ -1,8 +1,8 @@
 /**
  * 100-6 / 1007-8: Unified Campaign Performance & AI Pitch Generation.
- * VERSION: "API SAFETY FIX"
- * * FIX: Added safety checks for 'row.metrics' to prevent crashes when API returns
- * campaigns without metric objects (e.g. zero traffic rows).
+ * VERSION: "API SAFETY FIX + SHOPPING REMEDY COMPLIANCE"
+ * * FIX: Added safety checks for 'row.metrics' to prevent crashes.
+ * * COMPLIANCE: Added filter for Shopping/PMax campaigns targeting EEA/UK/CH.
  */
 function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   
@@ -14,6 +14,18 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   const TYPES_ALL = "'SEARCH', 'DISPLAY', 'VIDEO', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'SHOPPING'";
   const TYPES_FOR_CALCULATION = ['SEARCH', 'PERFORMANCE_MAX', 'SHOPPING']; 
   const TYPES_IS_QUERY = "'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING'";
+
+  // --- COMPLIANCE: List of EEA, UK, and CH Country IDs ---
+  // Austria, Belgium, Bulgaria, Croatia, Cyprus, Czechia, Denmark, Estonia, Finland, France,
+  // Germany, Greece, Hungary, Ireland, Italy, Latvia, Lithuania, Luxembourg, Malta, Netherlands,
+  // Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden, UK (2826), Switzerland (2756),
+  // Norway (2578), Iceland (2352), Liechtenstein (2438).
+  const REMEDY_COUNTRY_IDS = [
+    2040, 2056, 2100, 2191, 2196, 2203, 2208, 2233, 2246, 2250, 
+    2276, 2300, 2348, 2372, 2380, 2428, 2440, 2442, 2470, 2528, 
+    2616, 2620, 2642, 2703, 2705, 2724, 2752, 2826, 2756, 2578, 
+    2352, 2438
+  ];
 
   Logger.log(`\n=== STARTING AI ANALYSIS (CID: ${cidRaw}, Range: ${TIME_RANGE}) ===`);
 
@@ -37,6 +49,12 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   const Q3_IS_METRICS = `SELECT campaign.id, metrics.search_impression_share, metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type IN (${TYPES_IS_QUERY}) AND segments.date DURING ${TIME_RANGE}`;
   const Q4_BUDGET_RECS = `SELECT campaign.id, campaign_budget.has_recommended_budget, campaign_budget.recommended_budget_amount_micros, campaign_budget.recommended_budget_estimated_change_weekly_cost_micros FROM campaign WHERE campaign.status = 'ENABLED' AND campaign.primary_status_reasons CONTAINS ANY ('BUDGET_CONSTRAINED')`;
 
+  // --- COMPLIANCE QUERIES ---
+  // 1. Identify PMax campaigns that have a Merchant Center ID linked (Targeting Feed)
+  const Q_PMAX_WITH_FEED = `SELECT campaign.id FROM campaign WHERE campaign.advertising_channel_type = 'PERFORMANCE_MAX' AND campaign.shopping_setting.merchant_id IS NOT NULL`;
+  // 2. Identify Campaigns targeting restricted locations
+  const Q_LOCATIONS = `SELECT campaign.id, campaign_criterion.location.geo_target_constant FROM campaign_criterion WHERE campaign_criterion.type = 'LOCATION' AND campaign_criterion.negative = FALSE AND campaign.status = 'ENABLED'`;
+
   try {
     const cidTrimmed = String(cidRaw).trim();
     const extIds = InternalAdsApp.getExternalCustomerIds([cidTrimmed]);
@@ -47,10 +65,45 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
     const curRes = executeLocalQuery(apiCid, Q0_CURRENCY);
     currency = curRes[0]?.customer?.currencyCode || 'EUR';
     
+    // --- PRE-CALCULATE COMPLIANCE LISTS ---
+    const pmaxFeedSet = new Set();
+    const campaignsTargetingRemedy = new Set();
+
+    // Fetch PMax Feeds
+    const feedRes = executeLocalQuery(apiCid, Q_PMAX_WITH_FEED);
+    feedRes.forEach(row => pmaxFeedSet.add(row.campaign.id));
+
+    // Fetch Locations and check against REMEDY_COUNTRY_IDS
+    const locRes = executeLocalQuery(apiCid, Q_LOCATIONS);
+    locRes.forEach(row => {
+        if(row.campaignCriterion && row.campaignCriterion.location && row.campaignCriterion.location.geoTargetConstant) {
+            // geoTargetConstant format: "geoTargetConstants/2276"
+            const geoId = parseInt(row.campaignCriterion.location.geoTargetConstant.split('/').pop());
+            if (REMEDY_COUNTRY_IDS.includes(geoId)) {
+                campaignsTargetingRemedy.add(row.campaign.id);
+            }
+        }
+    });
+
     const resQ1 = executeLocalQuery(apiCid, Q1_FINANCIALS);
     const campaigns = new Map();
     
     resQ1.forEach(row => {
+        const cId = row.campaign.id;
+        const cType = row.campaign.advertisingChannelType;
+
+        // --- COMPLIANCE FILTER LOGIC ---
+        // We exclude if:
+        // 1. It is SHOPPING OR (PMAX with Feed)
+        // 2. AND it targets a Remedy Country
+        const isShoppingOrFeedPmax = (cType === 'SHOPPING') || (cType === 'PERFORMANCE_MAX' && pmaxFeedSet.has(cId));
+        
+        if (isShoppingOrFeedPmax && campaignsTargetingRemedy.has(cId)) {
+            // Skip this campaign completely
+            return; 
+        }
+        // -------------------------------
+
         const reasons = row.campaign.primaryStatusReasons || [];
         const isStatusLimited = reasons.includes('BUDGET_CONSTRAINED');
         
