@@ -25,26 +25,6 @@ function setupBudgetRun(formData) {
     formData.spreadsheetId = ss.getId();
     formData.sheetName = sheet.getName();
     
-    // 3. Dateiuploads verarbeiten (in Drive puffern, da PropertyService zu klein)
-    if (formData.attachedFiles && formData.attachedFiles.length > 0) {
-       const processedFiles = [];
-       for (const file of formData.attachedFiles) {
-          if (file.base64data) {
-              try {
-                  const blob = Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename);
-                  const driveFile = DriveApp.createFile(blob);
-                  processedFiles.push({
-                      filename: file.filename, mimeType: file.mimeType,
-                      driveFileId: driveFile.getId(), isTemp: true
-                  });
-              } catch (e) { console.error("File upload error:", e); }
-          }
-       }
-       formData.attachedFiles = processedFiles;
-    } else {
-       formData.attachedFiles = [];
-    }
-
     // Config final speichern (User Scope)
     PropertiesService.getUserProperties().setProperty('budgetBatchFormData', JSON.stringify(formData));
 
@@ -94,12 +74,7 @@ function processOneBatch() {
     // --- CHECK: ALLES FERTIG? ---
     if (rowsToProcess.length === 0) {
         console.log("=== DONE: No more rows found. ===");
-        // Aufr?umen
-        if (formData.attachedFiles) {
-            formData.attachedFiles.forEach(f => {
-                if (f.driveFileId && f.isTemp) try { DriveApp.getFileById(f.driveFileId).setTrashed(true); } catch(e) {}
-            });
-        }
+       
         PropertiesService.getUserProperties().deleteProperty('budgetBatchFormData');
         return { status: 'DONE' }; 
     }
@@ -146,14 +121,6 @@ function processBatchItems_(batch, formData, sheet) {
        throw new Error(`Draft Template nicht gefunden: "${formData.subjectLine}"`);
     }
 
-    // Anh?nge vorbereiten
-    const userAttachments = [];
-    if (formData.attachedFiles) {
-        formData.attachedFiles.forEach(file => {
-            if (file.driveFileId) try { userAttachments.push(DriveApp.getFileById(file.driveFileId).getBlob()); } catch(e) {}
-        });
-    }
-
     // SCHLEIFE DURCH DIE ITEMS
     for (const item of batch) {
         const rowNumber = item.rowNumber;
@@ -175,7 +142,7 @@ function processBatchItems_(batch, formData, sheet) {
              const analysisResult = generateUnifiedAiBudgetAnalysis(cidRaw, formData.dateRange);
              
              // 2. PDF Erstellung (External Tool) - mit Sicherheitscheck
-             const finalAttachments = [...emailTemplate.attachments, ...userAttachments];
+             const finalAttachments = [...emailTemplate.attachments];
              
              if (formData.enablePdfAttachment) {
                 // Fallbacks, falls Analyse-Daten unvollst?ndig
@@ -279,11 +246,6 @@ function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false)
     attachments: attachments,
     inlineImages: inlineImages
   };
-}
-
-function convertBase64ToBlobs_(files) {
-    if (!files || files.length === 0) return [];
-    return files.map(file => Utilities.newBlob(Utilities.base64Decode(file.base64data), file.mimeType, file.filename));
 }
 
 // ANMERKUNG:
