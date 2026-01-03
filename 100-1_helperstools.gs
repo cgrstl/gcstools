@@ -271,3 +271,70 @@ function getTriggeredRows_(sheet, triggerColIndex) {
   Logger.log(`Found ${triggeredRows.length} triggered rows.`);
   return triggeredRows;
 }
+
+/**
+ * Finds a unique Gmail draft matching the subject line and extracts its content.
+ * Centralized helper for Email Sender and Budget Tool.
+ */
+function getGmailTemplateFromDrafts__emails(subject_line, requireUnique = false) {
+  Logger.log(`Searching for Gmail draft with subject: "${subject_line}" (Require unique: ${requireUnique})`);
+  
+  if (!subject_line || subject_line.trim() === "") {
+    throw new Error("Subject line for draft template cannot be empty.");
+  }
+  
+  const drafts = GmailApp.getDrafts();
+  const matchingDrafts = drafts.filter(d => d.getMessage().getSubject() === subject_line);
+  
+  if (matchingDrafts.length === 0) { 
+    throw new Error(`No Gmail draft found with subject: "${subject_line}"`);
+  }
+  
+  if (requireUnique && matchingDrafts.length > 1) { 
+    throw new Error(`Multiple Gmail drafts (${matchingDrafts.length}) found with subject: "${subject_line}". Please ensure only one draft has this exact subject.`);
+  }
+
+  const draft = matchingDrafts[0];
+  const msg = draft.getMessage();
+  let attachments = [];
+  let inlineImages = {};
+
+  try {
+    const regularAttachments = msg.getAttachments({ includeInlineImages: false, includeAttachments: true });
+    if (regularAttachments && regularAttachments.length > 0) {
+      attachments = regularAttachments.map(a => {
+        try { return a.copyBlob(); } catch (cbErr) { Logger.log(`Could not copy attachment blob "${a.getName()}": ${cbErr.message}`); return null; }
+      }).filter(b => b !== null);
+    }
+  } catch (e) {
+    Logger.log(`Could not get attachments for draft "${subject_line}": ${e.message}`);
+  }
+
+  try {
+    const rawInlineImages = msg.getAttachments({ includeInlineImages: true, includeAttachments: false });
+    if (rawInlineImages && rawInlineImages.length > 0) {
+      rawInlineImages.forEach(img => {
+        const headers = img.getHeaders();
+        const cidHeader = headers && headers['Content-ID'];
+        const cid = cidHeader ? String(cidHeader).replace(/[<>]/g, "") : null;
+
+        if (cid) {
+          try { inlineImages[cid] = img.copyBlob(); } catch (cbErr) { Logger.log(`Could not copy inline image blob "${img.getName()}" (CID: ${cid}): ${cbErr.message}`); }
+        } else {
+          Logger.log(`Warning: Found inline image named "${img.getName()}" without a Content-ID in draft "${subject_line}".`);
+        }
+      });
+    }
+  } catch (e) {
+    Logger.log(`Could not get inline images for draft "${subject_line}": ${e.message}`);
+  }
+
+  return {
+    message: {
+      text: msg.getPlainBody() || "",
+      html: msg.getBody() || ""
+    },
+    attachments: attachments,
+    inlineImages: inlineImages
+  };
+}
