@@ -6,11 +6,6 @@
         "userSymbol": "Calendar",
         "version": "v3",
         "serviceId": "calendar"
-      },
-      {
-        "userSymbol": "Drive",
-        "version": "v3",
-        "serviceId": "drive"
       }
     ]
   },
@@ -24,7 +19,6 @@
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/script.scriptapp",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/script.external_request"
   ],
   "urlFetchWhitelist": [
