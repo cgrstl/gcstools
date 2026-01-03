@@ -168,8 +168,8 @@ function processBatchItems_(batch, formData, sheet) {
 
              // KI Content einf?gen
              const aiContent = analysisResult.aiHtml || "<p>Keine Analyse verf?gbar.</p>";
-             finalBodyHtml = finalBodyHtml.replace('{{ai_budget_recommendations}}', aiContent);
-             finalBodyText = finalBodyText.replace('{{ai_budget_recommendations}}', 'Siehe HTML-Version.');
+             finalBodyHtml = finalBodyHtml.replace('{{budget_recommendation}}', aiContent);
+             finalBodyText = finalBodyText.replace('{{budget_recommendation}}', 'Siehe HTML-Version.');
 
              // 4. Draft erstellen
              const options = {
