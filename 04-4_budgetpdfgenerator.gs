@@ -1,8 +1,8 @@
 /**
- * @file 04-3_budgetpdfgenerator.gs
+ * @file 04-4_budgetpdfgenerator.gs
  * @description Erstellt ein PDF-Blob.
  * - Nutzt die BEREITS FORMATIERTEN Daten aus 1007-8.
- * - Kein Formatieren oder Rechnen mehr n?tig.
+ * - Kein Formatieren oder Rechnen mehr nötig.
  * - Layout: Landscape, Plain, mit Legende.
  */
 
@@ -15,7 +15,7 @@ function createBudgetReportPdf_(allCampaignsData, currency, externalCid, dateRan
     const reportTitle = `Campaign Budget Report for Google Ads Account ${externalCid} (${dateRangeString})`;
     const tableHtml = generatePdfHtmlTable_(allCampaignsData);
 
-    // 1. Fu?noten-Text definiert
+    // 1. Fußnoten-Text definiert
     const footerNote = "* Note: Cells marked with '-' indicate that the metric is not applicable to this campaign type or data is unavailable.";
 
     const fullHtml = `
@@ -30,13 +30,13 @@ function createBudgetReportPdf_(allCampaignsData, currency, externalCid, dateRan
             th, td { border: 1px solid #999; padding: 5px; vertical-align: top; }
             th { background-color: #f0f0f0; font-weight: bold; text-align: left; }
             td { font-weight: normal; color: #000; }
-            /* Zahlen rechtsb?ndig (Index 2 bis 9) */
+            /* Zahlen rechtsbündig (Index 2 bis 9) */
             td:nth-child(3), td:nth-child(4), td:nth-child(6), 
             td:nth-child(7), td:nth-child(8), td:nth-child(9), td:nth-child(10) { text-align: right; }
             /* Status zentriert */
             td:nth-child(5) { text-align: center; }
             
-            /* 2. CSS f?r Fu?note */
+            /* 2. CSS für Fußnote */
             .footer-note { font-size: 8pt; font-style: italic; margin-top: 10px; color: #555; }
           </style>
         </head>

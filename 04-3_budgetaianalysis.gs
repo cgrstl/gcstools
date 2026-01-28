@@ -1,5 +1,6 @@
 /**
- * 100-6 / 1007-8: Unified Campaign Performance & AI Pitch Generation.
+ * @file 04-3_budgetaianalysis.gs
+ * @description Unified Campaign Performance & AI Pitch Generation.
  * VERSION: "API SAFETY FIX + SHOPPING REMEDY COMPLIANCE + FALLBACK LOGIC"
  */
 function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
@@ -27,7 +28,7 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
   let currency = 'EUR';
   let finalAiHtml = "<ul><li>No relevant recommendations found.</li></ul>"; // Default Fallback
   
-  // EINZIGE Liste f?r ALLE Kampagnen (f?r PDF)
+  // EINZIGE Liste für ALLE Kampagnen (für PDF)
   const allCampaignsData = []; 
 
   // --- LOCAL HELPERS & QUERIES ---
@@ -191,7 +192,7 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
             CampaignName: c.name,
             CampaignType: c.type,
             Status: statusStr,
-            Conversions: c.conv.toFixed(1), // NEU: F?r Relevanz-Check durch KI
+            Conversions: c.conv.toFixed(1), // NEU: Für Relevanz-Check durch KI
             CurrentBudget: `${currency} ${c.budget.toFixed(2)}`,
             Depletion_Period: depletion.toFixed(1) + "%", 
             TimeRange: TIME_RANGE,
@@ -255,69 +256,69 @@ function generateUnifiedAiBudgetAnalysis(cidRaw, dateRangeString) {
 
 function callGeminiAI_standalone(campaignData) {
   const API_KEY = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
-  if (!API_KEY) return "<ul><li><b>Fehler:</b> API-Schl?ssel fehlt.</li></ul>";
+  if (!API_KEY) return "<ul><li><b>Fehler:</b> API-Schlüssel fehlt.</li></ul>";
   const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
   
   const prompt = `
     DU BIST: Ein Senior Google Ads Daten-Analyst.
-    DEINE AUFGABE: Erstelle eine pr?gnante, professionelle Budget-Analyse f?r eine E-Mail an einen Kunden.
+    DEINE AUFGABE: Erstelle eine prägnante, professionelle Budget-Analyse für eine E-Mail an einen Kunden.
     INPUT DATEN: ${JSON.stringify(campaignData, null, 2)}
-    TECHNISCHE FORMATIERUNG (WICHTIG F?R GMAIL):
-    1. Gib **ausschlie?lich** ein HTML-Fragment zur?ck (kein \`\`\`html Block, kein <body>).
-    2. Nutze eine ungeordnete Liste: <ul> f?r den Container, <li> f?r die Punkte.
-    3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> f?r Fettdruck.
+    TECHNISCHE FORMATIERUNG (WICHTIG FÜR GMAIL):
+    1. Gib **ausschließlich** ein HTML-Fragment zurück (kein \`\`\`html Block, kein <body>).
+    2. Nutze eine ungeordnete Liste: <ul> für den Container, <li> für die Punkte.
+    3. Nutze KEIN Markdown (keine **Sternchen**). Nutze <b> für Fettdruck.
     4. Nutze KEINE Schriftarten-Stile (kein style="font-family..."). Der Text muss sich dem E-Mail-Layout anpassen.
 
     SPRACHREGELUNG (STRIKT):
     1. **VERBOTENE WORTE (Niemals nutzen):** "Depletion", "Limited", "Budget Limited", "Missed", "Target Met", "Recommendation", "Efficiency Scale".
-    2. **PFLICHT-?BERSETZUNGEN:**
-       - "Limited by Budget" -> "durch das Budget eingeschr?nkt"
+    2. **PFLICHT-ÜBERSETZUNGEN:**
+       - "Limited by Budget" -> "durch das Budget eingeschränkt"
        - "LostIS_Budget" -> "Anteil entgangener Impressionen aufgrund des Budgets"
        - "LostIS_Rank" -> "Anteil entgangener Impressionen aufgrund des Ranges"
        - "Target Met" -> "Ziel erreicht"
        - "RecommendedBudget" -> "empfohlene Tagesbudget"
-       - "Depletion_Period" -> "Budget-Aussch?pfung" oder "Auslastung"
+       - "Depletion_Period" -> "Budget-Ausschöpfung" oder "Auslastung"
     3. **AUSNAHME:** Das Wort "Conversion" oder "Conversions" darf (und soll) verwendet werden.
 
-    REGELN F?R DEN INHALT:
-    1. **FOKUSSIERUNG (WICHTIG):** Beschr?nke dich auf die **maximal 3 wichtigsten** Bullet Points (\`<li>\`). Fasse Kampagnen mit identischen Problemen (z.B. Prio 1) zu *einem* Punkt zusammen (Clustering).
+    REGELN FÜR DEN INHALT:
+    1. **FOKUSSIERUNG (WICHTIG):** Beschränke dich auf die **maximal 3 wichtigsten** Bullet Points (\`<li>\`). Fasse Kampagnen mit identischen Problemen (z.B. Prio 1) zu *einem* Punkt zusammen (Clustering).
     2. **Abwechslung:** Variiere den Satzbau. Vermeide es, jeden Punkt identisch zu beginnen ("Die Kampagne...").
     3. **Keine Redundanz:** Schreibe NIEMALS "Wir verlieren entgangene Conversions". Das ist doppelt gemoppelt. 
        - RICHTIG: "Uns entgehen rechnerisch ca. [X] Conversions" oder "Das ungenutzte Potenzial liegt bei [X] Conversions".
-    4. **Tonalit?t:** Neutral, analytisch, l?sungsorientiert.
-    5. **Intelligenter Relevanz-Filter (WICHTIG):** - Setze "MissedConversions_Est" ins Verh?ltnis zu den erzielten "Conversions".
+    4. **Tonalität:** Neutral, analytisch, lösungsorientiert.
+    5. **Intelligenter Relevanz-Filter (WICHTIG):** - Setze "MissedConversions_Est" ins Verhältnis zu den erzielten "Conversions".
        - IGNORIERE Bagatell-Werte (z.B. 0.5 entgangen bei 100 erzielt -> irrelevant).
-       - Erw?hne entgangene Conversions NUR, wenn sie signifikant sind (z.B. > 10% Zuwachs-Potenzial ODER absolute Menge > 3).
+       - Erwähne entgangene Conversions NUR, wenn sie signifikant sind (z.B. > 10% Zuwachs-Potenzial ODER absolute Menge > 3).
 
-    ANALYSE-PRIORIT?TEN (Reihenfolge strikt beachten):
+    ANALYSE-PRIORITÄTEN (Reihenfolge strikt beachten):
     
     1. **Prio 1 (Effizienz-Skalierung - Kritisch):**
        - Wenn: TargetStatus = "Target Met" UND (Status = "Limited by Budget" ODER Depletion_Period > 90%).
-       - Strategie: Betone, dass die Kampagne effizient l?uft, aber vom Budget limitiert wird. Nenne die "MissedConversions_Est" (unter Beachtung des Relevanz-Filters) und den "LostIS_Budget". Schlage die Erh?hung auf das <b>[RecommendedBudget_API]</b> vor (falls "N/A", schlage eine schrittweise Erh?hung vor).
+       - Strategie: Betone, dass die Kampagne effizient läuft, aber vom Budget limitiert wird. Nenne die "MissedConversions_Est" (unter Beachtung des Relevanz-Filters) und den "LostIS_Budget". Schlage die Erhöhung auf das <b>[RecommendedBudget_API]</b> vor (falls "N/A", schlage eine schrittweise Erhöhung vor).
 
     2. **Prio 2 (Wachstums-Potenzial bei Limitierung):**
        - Wenn: TargetStatus = "No Target" UND Status = "Limited by Budget".
-       - Strategie: Weise auf die starke Nachfrage hin, die das aktuelle Budget ?bersteigt. Empfiehl einen Test mit h?herem Budget, um das Volumen zu pr?fen.
+       - Strategie: Weise auf die starke Nachfrage hin, die das aktuelle Budget übersteigt. Empfiehl einen Test mit höherem Budget, um das Volumen zu prüfen.
 
-    3. **Prio 3 (Kapazit?ts-Warnung):**
+    3. **Prio 3 (Kapazitäts-Warnung):**
        - Wenn: Depletion_Period > 80% (aber nicht "Limited by Budget").
-       - Strategie: Hinweis auf hohe Auslastung nahe der Kapazit?tsgrenze.
+       - Strategie: Hinweis auf hohe Auslastung nahe der Kapazitätsgrenze.
 
     4. **Prio 4 (Investitions-Chance / Skalierung - FALLBACK):**
-       - Wenn: KEINE der oben genannten Bedingungen (Prio 1-3) zutrifft (d.h. das Konto l?uft stabil ohne Limitierung und ohne hohe Auslastung).
+       - Wenn: KEINE der oben genannten Bedingungen (Prio 1-3) zutrifft (d.h. das Konto läuft stabil ohne Limitierung und ohne hohe Auslastung).
        - Strategie: Suche nach Kampagnen mit Potenzial ("Target Met" oder stabil).
-       - **WICHTIG (Rank-Verluste):** Pr?fe den "LostIS_Rank". Wenn dieser hoch ist (> 25%), gehen Conversions nicht durch fehlendes Budget, sondern durch zu niedrige Gebote verloren.
-       - Empfehlung: Schlage vor, das <b>vorhandene, freie Budget</b> offensiver zu nutzen. Empfiehl eine Anpassung der Zielvorgaben (z.B. ROAS leicht senken oder CPA erh?hen), um in aggressiveren Auktionen mehr Sichtbarkeit zu gewinnen (Angriff auf den "LostIS_Rank").
+       - **WICHTIG (Rank-Verluste):** Prüfe den "LostIS_Rank". Wenn dieser hoch ist (> 25%), gehen Conversions nicht durch fehlendes Budget, sondern durch zu niedrige Gebote verloren.
+       - Empfehlung: Schlage vor, das <b>vorhandene, freie Budget</b> offensiver zu nutzen. Empfiehl eine Anpassung der Zielvorgaben (z.B. ROAS leicht senken oder CPA erhöhen), um in aggressiveren Auktionen mehr Sichtbarkeit zu gewinnen (Angriff auf den "LostIS_Rank").
 
     BEISPIEL OUTPUT (Stil-Referenz):
     <ul>
-    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, sto?en jedoch t?glich an ihr Limit. Aktuell entgehen uns hierdurch ein signifikantes Volumen von ca. 20 Conversions pro Woche. Um dieses Potenzial voll auszusch?pfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
-    <li>Bei <b>"Demand Gen"</b> sehen wir eine extrem hohe Nachfrage, die das Budget von <b>EUR 200.00</b> vollst?ndig auslastet. Eine Anpassung w?rde helfen, die Sichtbarkeit an starken Tagen zu sichern.</li>
+    <li>Die Kampagnen <b>"Shopping"</b> und <b>"Generic Search"</b> arbeiten hocheffizient im Zielkorridor, stoßen jedoch täglich an ihr Limit. Aktuell entgehen uns hierdurch ein signifikantes Volumen von ca. 20 Conversions pro Woche. Um dieses Potenzial voll auszuschöpfen, empfehlen wir eine Anhebung auf <b>EUR 1500.00</b>.</li>
+    <li>Bei <b>"Demand Gen"</b> sehen wir eine extrem hohe Nachfrage, die das Budget von <b>EUR 200.00</b> vollständig auslastet. Eine Anpassung würde helfen, die Sichtbarkeit an starken Tagen zu sichern.</li>
     </ul>
     
     ODER (Falls Prio 4 greift - Stabil aber ungenutzt):
     <ul>
-    <li>Die Kampagnen <b>"Performance Max"</b> und <b>"Search Brand"</b> laufen stabil, sch?pfen ihr Tagesbudget jedoch derzeit nicht aus. Wir sehen jedoch Potenziale im Auktionsumfeld (Lost IS Rank: 45%). Um das Wachstum anzukurbeln, empfehlen wir eine offensivere Investitionsstrategie: Durch eine Anpassung der Zielvorgaben (z.B. Senkung des ROAS-Ziels) k?nnten wir das bereits vorhandene Budget nutzen, um zus?tzliche Marktanteile zu gewinnen.</li>
+    <li>Die Kampagnen <b>"Performance Max"</b> und <b>"Search Brand"</b> laufen stabil, schöpfen ihr Tagesbudget jedoch derzeit nicht aus. Wir sehen jedoch Potenziale im Auktionsumfeld (Lost IS Rank: 45%). Um das Wachstum anzukurbeln, empfehlen wir eine offensivere Investitionsstrategie: Durch eine Anpassung der Zielvorgaben (z.B. Senkung des ROAS-Ziels) könnten wir das bereits vorhandene Budget nutzen, um zusätzliche Marktanteile zu gewinnen.</li>
     </ul>`;
 
   const payload = { contents: [{ parts: [{ text: prompt }] }] };

@@ -1,8 +1,8 @@
 /**
- * @file 04-1_budet.gs (Version 7.3 - Client-Side Polling)
- * @description Orchestrator f?r Budget-Empfehlungen.
- * - Logik 1:1 ?bernommen aus v5.2.
- * - Architektur ge?ndert auf Client-Side Polling (vermeidet Trigger-Quotas).
+ * @file 04-1_budget.gs (Version 7.3 - Client-Side Polling)
+ * @description Orchestrator für Budget-Empfehlungen.
+ * - Logik 1:1 übernommen aus v5.2.
+ * - Architektur geändert auf Client-Side Polling (vermeidet Trigger-Quotas).
  * - BATCH_SIZE = 3 (Sicherheitslimit).
  */
 
@@ -49,7 +49,7 @@ function processOneBatch() {
     if (!formDataJson) return { status: 'ERROR', message: "Konfiguration verloren. Bitte neu starten." };
     const formData = JSON.parse(formDataJson);
 
-    // 2. Sheet ?ffnen
+    // 2. Sheet öffnen
     const sheet = SpreadsheetApp.openById(formData.spreadsheetId).getSheetByName(formData.sheetName);
     if (!sheet) return { status: 'ERROR', message: "Sheet nicht mehr gefunden." };
     
@@ -83,10 +83,10 @@ function processOneBatch() {
     const currentBatch = rowsToProcess.slice(0, BATCH_SIZE);
     console.log(`Processing batch of ${currentBatch.length} rows...`);
     
-    // Die eigentliche Arbeit ausf?hren (ausgelagert, um Hauptfunktion sauber zu halten)
+    // Die eigentliche Arbeit ausführen (ausgelagert, um Hauptfunktion sauber zu halten)
     processBatchItems_(currentBatch, formData, sheet); 
 
-    // R?ckmeldung an Sidebar
+    // Rückmeldung an Sidebar
     return { 
         status: 'CONTINUE', 
         processed: currentBatch.length, 
@@ -145,7 +145,7 @@ function processBatchItems_(batch, formData, sheet) {
              const finalAttachments = [...emailTemplate.attachments];
              
              if (formData.enablePdfAttachment) {
-                // Fallbacks, falls Analyse-Daten unvollst?ndig
+                // Fallbacks, falls Analyse-Daten unvollständig
                 const pdfData = analysisResult.allCampaignsData || [];
                 const pdfCurr = analysisResult.currency || "EUR";
                 const pdfCid = analysisResult.externalCid || cidRaw;
@@ -166,8 +166,8 @@ function processBatchItems_(batch, formData, sheet) {
              let finalBodyHtml = fillPlaceholdersInString_(emailTemplate.message.html, rowDataForPlaceholders);
              let finalBodyText = fillPlaceholdersInString_(emailTemplate.message.text, rowDataForPlaceholders);
 
-             // KI Content einf?gen
-             const aiContent = analysisResult.aiHtml || "<p>Keine Analyse verf?gbar.</p>";
+             // KI Content einfügen
+             const aiContent = analysisResult.aiHtml || "<p>Keine Analyse verfügbar.</p>";
              finalBodyHtml = finalBodyHtml.replace('{{budget_recommendation}}', aiContent);
              finalBodyText = finalBodyText.replace('{{budget_recommendation}}', 'Siehe HTML-Version.');
 
@@ -227,4 +227,4 @@ function extractPlaceholderValues_(rowData, placeholderMap) {
 // ANMERKUNG:
 // Die Funktionen columnLetterToIndex_, generateUnifiedAiBudgetAnalysis, 
 // createBudgetReportPdf_ und fillPlaceholdersInString_
-// m?ssen in '100-1 helperstools.gs' vorhanden sein.
+// müssen in '100-1_helperstools.gs' vorhanden sein.
