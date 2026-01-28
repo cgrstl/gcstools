@@ -1,8 +1,8 @@
 /**
- * @file Combined_Email_Sender.gs
+ * @file 01-1_emails.gs
  * @description Consolidated server-side logic for the Mass Email Sender tool.
  * This file contains the main email processing functions and email-specific helpers.
- * It relies on '100-1_ghelpertools.gs' for general utility functions.
+ * It relies on '100-1_helperstools.gs' for general utility functions.
  * @OnlyCurrentDoc
  * @Needs GmailApp
  * @Needs SpreadsheetApp
